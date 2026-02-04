@@ -3,6 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect fill='%233b82f6' width='32' height='32' rx='4'/></svg>" type="image/svg+xml">
     <title>Qwen3-ASR 高级客户端</title>
     <style>
         :root {
@@ -195,11 +196,48 @@
             100% { opacity: 1; }
         }
         
-        .visualizer {
-            height: 60px;
-            background: var(--neutral-50);
-            border-radius: 4px;
+        .visualizer-wrap {
             margin: 10px 0;
+        }
+        .visualizer-level {
+            font-size: 13px;
+            color: var(--neutral-600);
+            margin-bottom: 4px;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+        .visualizer-level-num {
+            font-weight: 700;
+            font-size: 18px;
+            color: var(--primary-600);
+            min-width: 3em;
+        }
+        .visualizer-level-peak {
+            font-weight: 600;
+            font-size: 14px;
+            color: var(--neutral-600);
+            min-width: 4em;
+        }
+        .visualizer-level-bar-bg {
+            flex: 1;
+            height: 12px;
+            background: var(--neutral-200);
+            border-radius: 6px;
+            overflow: hidden;
+        }
+        .visualizer-level-bar-fill {
+            height: 100%;
+            border-radius: 6px;
+            background: linear-gradient(90deg, var(--primary-400), var(--primary-600));
+            width: 0%;
+            transition: width 0.05s ease-out;
+        }
+        .visualizer {
+            height: 100px;
+            min-height: 100px;
+            background: var(--neutral-100);
+            border-radius: 6px;
             position: relative;
             overflow: hidden;
         }
@@ -207,10 +245,11 @@
         .visualizer-bar {
             position: absolute;
             bottom: 0;
-            width: 4px;
+            min-width: 3px;
             background: var(--primary-500);
-            border-radius: 2px 2px 0 0;
+            border-radius: 3px 3px 0 0;
         }
+
     </style>
 </head>
 <body>
@@ -266,10 +305,14 @@
                 <div class="column">
                     <div class="form-group">
                         <label for="mic-device">选择麦克风设备</label>
-                        <select id="mic-device">
-                            <option value="">默认设备</option>
-                        </select>
+                        <div style="display: flex; gap: 8px; align-items: center; flex-wrap: wrap;">
+                            <select id="mic-device" style="flex: 1; min-width: 180px;">
+                                <option value="">使用系统默认</option>
+                            </select>
+                            <button type="button" id="test-device-btn" title="试听当前设备，看电平条是否随说话动">测试此设备</button>
+                        </div>
                         <div id="mic-device-hint" style="margin-top: 4px; font-size: 12px; color: var(--neutral-500); min-height: 16px;"></div>
+                        <div id="mic-test-status" style="margin-top: 4px; font-size: 12px; color: var(--primary-600); min-height: 16px;"></div>
                     </div>
                     
                     <div class="form-group">
@@ -294,11 +337,22 @@
                     
                     <div class="form-group" style="margin-top: 15px;">
                         <div id="rec-status">就绪</div>
-                        <div class="visualizer" id="audio-visualizer"></div>
+                        <div class="visualizer-wrap">
+                            <div class="visualizer-level" id="visualizer-level-wrap" style="display: none;">
+                                <span class="visualizer-level-num" id="visualizer-level-num">0%</span>
+                                <span>当前</span>
+                                <div class="visualizer-level-bar-bg">
+                                    <div class="visualizer-level-bar-fill" id="visualizer-level-bar"></div>
+                                </div>
+                                <span class="visualizer-level-peak" id="visualizer-level-peak">峰值 0%</span>
+                            </div>
+                            <div class="visualizer" id="audio-visualizer"></div>
+                        </div>
                     </div>
                     
                     <div class="audio-player">
                         <button id="play-btn" disabled>播放录音</button>
+                        <button id="download-btn" disabled title="录音结束后可下载">下载录音</button>
                         <div class="audio-player" id="audio-player-container" style="display: none;">
                             <audio id="audio-player" controls></audio>
                         </div>
@@ -325,6 +379,46 @@
         let audioContext;
         let analyser;
         let animationId;
+        let pcmChunks = [];
+        let recordingStartTime = 0;
+        let previousAudioDevices = [];
+        let deviceChangeDebounceTimer = null;
+
+        function encodePCMToWav(pcmChunks, sampleRate) {
+            let totalLen = 0;
+            for (let i = 0; i < pcmChunks.length; i++) totalLen += pcmChunks[i].length;
+            const pcm = new Float32Array(totalLen);
+            let offset = 0;
+            for (let i = 0; i < pcmChunks.length; i++) {
+                pcm.set(pcmChunks[i], offset);
+                offset += pcmChunks[i].length;
+            }
+            const numChannels = 1;
+            const bitsPerSample = 16;
+            const byteRate = sampleRate * numChannels * (bitsPerSample / 8);
+            const dataSize = pcm.length * (bitsPerSample / 8);
+            const buffer = new ArrayBuffer(44 + dataSize);
+            const view = new DataView(buffer);
+            const writeStr = (offset, str) => { for (let i = 0; i < str.length; i++) view.setUint8(offset + i, str.charCodeAt(i)); };
+            writeStr(0, 'RIFF');
+            view.setUint32(4, 36 + dataSize, true);
+            writeStr(8, 'WAVE');
+            writeStr(12, 'fmt ');
+            view.setUint32(16, 16, true);
+            view.setUint16(20, 1, true);
+            view.setUint16(22, numChannels, true);
+            view.setUint32(24, sampleRate, true);
+            view.setUint32(28, byteRate, true);
+            view.setUint16(32, numChannels * (bitsPerSample / 8), true);
+            view.setUint16(34, bitsPerSample, true);
+            writeStr(36, 'data');
+            view.setUint32(40, dataSize, true);
+            for (let i = 0; i < pcm.length; i++) {
+                const s = Math.max(-1, Math.min(1, pcm[i]));
+                view.setInt16(44 + i * 2, s < 0 ? s * 0x8000 : s * 0x7FFF, true);
+            }
+            return new Blob([buffer], { type: 'audio/wav' });
+        }
 
         // 检查是否在安全上下文中（HTTPS 或 localhost）。file:// 下无法可靠使用麦克风
         function isSecureContext() {
@@ -332,39 +426,88 @@
                 && navigator.mediaDevices && typeof navigator.mediaDevices.enumerateDevices === 'function';
         }
 
-        // 获取真实设备列表（需要先有麦克风权限才能拿到完整标签，否则标签可能为空）
+        // 获取当前系统默认的麦克风 deviceId（需先有权限）
+        async function getDefaultAudioInputId() {
+            try {
+                const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+                const track = stream.getAudioTracks()[0];
+                const id = track ? track.getSettings().deviceId : null;
+                stream.getTracks().forEach(t => t.stop());
+                return id || null;
+            } catch (e) {
+                return null;
+            }
+        }
+
+        // 参考 Web-AI-Kit：设备变化防抖
+        function handleDeviceChange() {
+            clearTimeout(deviceChangeDebounceTimer);
+            deviceChangeDebounceTimer = setTimeout(() => {
+                populateDeviceList(micTabDeviceListLoaded);
+            }, 500);
+        }
+
+        // 获取麦克风设备列表（参考 Web-AI-Kit：插拔后保持/恢复选中项，新设备可标出）
         async function populateDeviceList(requirePermission = false) {
             const selectElement = document.getElementById('mic-device');
             const hintEl = document.getElementById('mic-device-hint');
 
             if (!isSecureContext()) {
-                selectElement.innerHTML = '<option value="">默认设备</option>';
+                selectElement.innerHTML = '<option value="">使用系统默认</option>';
                 if (hintEl) hintEl.textContent = '请通过 localhost 或 HTTPS 打开本页面，否则无法使用麦克风';
                 return;
             }
 
             try {
-                if (requirePermission) {
-                    const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-                    stream.getTracks().forEach(track => track.stop());
-                }
-
                 const devices = await navigator.mediaDevices.enumerateDevices();
                 const audioInputs = devices.filter(d => d.kind === 'audioinput');
-                selectElement.innerHTML = '<option value="">默认设备</option>';
+                const currentAudioId = selectElement.value;
+                const hadPreviousList = previousAudioDevices.length > 0;
+                const newAudioDevice = audioInputs.find(d => !previousAudioDevices.some(p => p.deviceId === d.deviceId));
+                previousAudioDevices = audioInputs;
 
+                let defaultId = null;
+                if (requirePermission && audioInputs.length) {
+                    try {
+                        const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+                        const track = stream.getAudioTracks()[0];
+                        if (track) defaultId = track.getSettings().deviceId || null;
+                        stream.getTracks().forEach(t => t.stop());
+                    } catch (e) {}
+                }
+
+                selectElement.innerHTML = '<option value="">使用系统默认</option>';
+                let hasCurrentAudio = false;
+                const labelCount = {};
                 audioInputs.forEach((device, index) => {
                     const option = document.createElement('option');
                     option.value = device.deviceId;
-                    option.textContent = device.label || `麦克风 ${index + 1}`;
+                    let label = device.label && device.label.trim() ? device.label : `${device.kind} ${(device.deviceId || '').slice(0, 8)}`;
+                    if (label in labelCount) {
+                        labelCount[label]++;
+                        label = label + ' (#' + labelCount[label] + ')';
+                    } else {
+                        labelCount[label] = 1;
+                    }
+                    if (defaultId && device.deviceId === defaultId) label = '【系统默认】 ' + label;
+                    option.textContent = label;
                     selectElement.appendChild(option);
+                    if (device.deviceId === currentAudioId) hasCurrentAudio = true;
                 });
+
+                if (hadPreviousList && newAudioDevice) {
+                    selectElement.value = newAudioDevice.deviceId;
+                } else if (currentAudioId && !hasCurrentAudio && selectElement.options.length > 1) {
+                    selectElement.selectedIndex = 0;
+                } else if (currentAudioId && hasCurrentAudio) {
+                    selectElement.value = currentAudioId;
+                }
 
                 if (hintEl) hintEl.textContent = audioInputs.length ? '' : '未检测到麦克风设备';
             } catch (err) {
                 console.error('无法获取设备列表:', err);
-                selectElement.innerHTML = '<option value="">默认设备</option>';
-                if (hintEl) hintEl.textContent = '需要允许麦克风权限才能列出设备，或使用默认设备';
+                selectElement.innerHTML = '<option value="">使用系统默认</option>';
+                if (hintEl) hintEl.textContent = '需要允许麦克风权限才能列出设备';
             }
         }
 
@@ -376,9 +519,7 @@
             // 先不请求麦克风权限，仅在有 mediaDevices 时预填一次（可能无标签）
             if (isSecureContext()) {
                 await populateDeviceList(false);
-                navigator.mediaDevices.addEventListener('devicechange', () => {
-                    populateDeviceList(micTabDeviceListLoaded);
-                });
+                navigator.mediaDevices.addEventListener('devicechange', handleDeviceChange);
             } else {
                 populateDeviceList(false);
             }
@@ -415,6 +556,105 @@
             document.getElementById('start-rec-btn').addEventListener('click', startRecording);
             document.getElementById('stop-rec-btn').addEventListener('click', stopRecording);
             document.getElementById('play-btn').addEventListener('click', playRecording);
+            document.getElementById('download-btn').addEventListener('click', downloadRecording);
+            document.getElementById('test-device-btn').addEventListener('click', toggleTestDevice);
+        }
+
+        let testStream = null;
+        let testAnimId = null;
+
+        let levelPeak = 0;
+
+        // 更新音量条和数字；peakPct 为本次录音/测试以来的峰值，便于对比不同设备
+        function updateLevelDisplay(rawMax, peakPct) {
+            const wrap = document.getElementById('visualizer-level-wrap');
+            const numEl = document.getElementById('visualizer-level-num');
+            const barEl = document.getElementById('visualizer-level-bar');
+            const peakEl = document.getElementById('visualizer-level-peak');
+            if (!wrap || !numEl || !barEl) return;
+            wrap.style.display = 'flex';
+            const pct = Math.min(100, Math.round((rawMax / 255) * 100));
+            if (peakPct != null) levelPeak = Math.max(levelPeak, peakPct);
+            numEl.textContent = pct + '%';
+            barEl.style.width = pct + '%';
+            if (peakEl) peakEl.textContent = '峰值 ' + levelPeak + '%';
+        }
+        function hideLevelDisplay() {
+            const wrap = document.getElementById('visualizer-level-wrap');
+            if (wrap) wrap.style.display = 'none';
+            const bar = document.getElementById('visualizer-level-bar');
+            if (bar) bar.style.width = '0%';
+            levelPeak = 0;
+        }
+        function resetLevelPeak() {
+            levelPeak = 0;
+        }
+
+        async function toggleTestDevice() {
+            const btn = document.getElementById('test-device-btn');
+            const statusEl = document.getElementById('mic-test-status');
+            const visualizer = document.getElementById('audio-visualizer');
+
+            if (testStream) {
+                testStream.getTracks().forEach(t => t.stop());
+                testStream = null;
+                if (testAnimId) cancelAnimationFrame(testAnimId);
+                testAnimId = null;
+                visualizer.innerHTML = '';
+                statusEl.textContent = '';
+                btn.textContent = '测试此设备';
+                hideLevelDisplay();
+                return;
+            }
+
+            btn.textContent = '停止测试';
+            statusEl.textContent = '正在打开设备…';
+            const deviceId = document.getElementById('mic-device').value;
+            const constraints = { audio: deviceId ? { deviceId: { exact: deviceId } } : true };
+
+            try {
+                testStream = await navigator.mediaDevices.getUserMedia(constraints);
+                resetLevelPeak();
+                statusEl.textContent = '测试中：请大声说一句话，看「峰值」数字 — 换设备再测，峰值最高的就是最灵敏的';
+                if (!audioContext) audioContext = new (window.AudioContext || window.webkitAudioContext)();
+                if (audioContext.state === 'suspended') await audioContext.resume();
+                const ctx = audioContext;
+                const anal = ctx.createAnalyser();
+                anal.fftSize = 256;
+                anal.smoothingTimeConstant = 0.5;
+                const src = ctx.createMediaStreamSource(testStream);
+                src.connect(anal);
+                const bufLen = anal.frequencyBinCount;
+                const dataArr = new Uint8Array(bufLen);
+                const maxH = visualizer.offsetHeight || 100;
+                const w = visualizer.offsetWidth || 300;
+                const barW = Math.max(2, (w / bufLen) - 1);
+
+                function draw() {
+                    if (!testStream || testStream.active === false) return;
+                    testAnimId = requestAnimationFrame(draw);
+                    anal.getByteFrequencyData(dataArr);
+                    const maxVal = Math.max.apply(null, dataArr);
+                    const pct = Math.min(100, Math.round((maxVal / 255) * 100));
+                    updateLevelDisplay(maxVal, pct);
+                    visualizer.innerHTML = '';
+                    for (let i = 0; i < bufLen; i++) {
+                        const bar = document.createElement('div');
+                        bar.className = 'visualizer-bar';
+                        const raw = dataArr[i];
+                        const barHeight = Math.max(2, Math.min(maxH, (raw / 255) * maxH));
+                        bar.style.width = barW + 'px';
+                        bar.style.height = barHeight + 'px';
+                        bar.style.left = (i * (barW + 1)) + 'px';
+                        bar.style.background = 'var(--primary-500)';
+                        visualizer.appendChild(bar);
+                    }
+                }
+                draw();
+            } catch (e) {
+                statusEl.textContent = '无法打开设备: ' + e.message;
+                btn.textContent = '测试此设备';
+            }
         }
 
         // 处理上传
@@ -461,44 +701,112 @@
         // 开始录音
         async function startRecording() {
             try {
-                // 确保audioContext已创建
+                // 确保 audioContext 已创建，并在用户点击下恢复（浏览器策略：未 resume 时无声音、可视化无数据）
                 if (!audioContext) {
                     audioContext = new (window.AudioContext || window.webkitAudioContext)();
+                    console.log('[录音] 新建 AudioContext, state=', audioContext.state);
                 }
-                
+                if (audioContext.state === 'suspended') {
+                    await audioContext.resume();
+                    console.log('[录音] AudioContext resume 后 state=', audioContext.state);
+                }
+
                 const deviceId = document.getElementById('mic-device').value;
                 const constraints = {
-                    audio: deviceId
-                        ? { deviceId: { ideal: deviceId } }
-                        : true
+                    audio: deviceId ? { deviceId: { exact: deviceId } } : true
                 };
-                const stream = await navigator.mediaDevices.getUserMedia(constraints);
-                
-                // 设置音频可视化
+                let stream;
+                try {
+                    stream = await navigator.mediaDevices.getUserMedia(constraints);
+                } catch (err) {
+                    if ((err.name === 'NotReadableError' || err.name === 'TrackStartError' || err.name === 'OverconstrainedError') && deviceId) {
+                        await new Promise(r => setTimeout(r, 200));
+                        stream = await navigator.mediaDevices.getUserMedia(constraints);
+                    } else {
+                        throw err;
+                    }
+                }
+                stream.getTracks().forEach(track => {
+                    track.onended = () => {
+                        if (navigator.mediaDevices) handleDeviceChange();
+                    };
+                });
+                console.log('[录音] getUserMedia 成功, 音轨数=', stream.getAudioTracks().length, 'enabled=', stream.getAudioTracks().map(t => t.enabled));
+
+                visualizerLogCount = 0;
+                resetLevelPeak();
                 setupAudioVisualizer(stream);
-                
-                mediaRecorder = new MediaRecorder(stream);
+
+                // 同时用 PCM 录制一份 WAV，避免 weba 无声音/时长错
+                pcmChunks = [];
+                recordingStartTime = Date.now();
+                const bufferSize = 4096;
+                const scriptProcessor = audioContext.createScriptProcessor(bufferSize, 1, 1);
+                const gainNode = audioContext.createGain();
+                gainNode.gain.value = 0;
+                const pcmSource = audioContext.createMediaStreamSource(stream);
+                pcmSource.connect(scriptProcessor);
+                scriptProcessor.connect(gainNode);
+                gainNode.connect(audioContext.destination);
+                scriptProcessor.onaudioprocess = (e) => {
+                    const input = e.inputBuffer.getChannelData(0);
+                    pcmChunks.push(new Float32Array(input));
+                };
+
+                // 优先使用浏览器支持的格式，避免录音为空
+                const mimeOpts = ['audio/webm;codecs=opus', 'audio/webm', 'audio/ogg;codecs=opus', 'audio/mp4'];
+                let mimeType = 'audio/webm';
+                for (const m of mimeOpts) {
+                    if (MediaRecorder.isTypeSupported(m)) {
+                        mimeType = m;
+                        break;
+                    }
+                }
+                console.log('[录音] MediaRecorder 使用 mimeType=', mimeType);
+
+                mediaRecorder = new MediaRecorder(stream, { mimeType: mimeType });
                 audioChunks = [];
 
                 mediaRecorder.ondataavailable = event => {
-                    if (event.data && event.data.size > 0) audioChunks.push(event.data);
+                    if (event.data && event.data.size > 0) {
+                        audioChunks.push(event.data);
+                        console.log('[录音] ondataavailable 块数=', audioChunks.length, '本块 size=', event.data.size);
+                    }
                 };
 
                 mediaRecorder.onstop = async () => {
-                    // 使用 MediaRecorder 真实输出的格式（多为 audio/webm），不要标成 audio/wav 否则服务端会解析错误
+                    scriptProcessor.disconnect();
+                    gainNode.disconnect();
+                    pcmSource.disconnect();
+
                     const mime = mediaRecorder.mimeType || 'audio/webm';
-                    const ext = mime.indexOf('webm') !== -1 ? 'webm' : (mime.indexOf('ogg') !== -1 ? 'ogg' : 'webm');
                     recordedAudioBlob = new Blob(audioChunks, { type: mime });
+                    console.log('[录音] onstop: 块数=', audioChunks.length, 'blob.size=', recordedAudioBlob.size, 'pcmChunks=', pcmChunks.length);
+
+                    if (pcmChunks.length > 0) {
+                        try {
+                            const wavBlob = encodePCMToWav(pcmChunks, audioContext.sampleRate);
+                            if (wavBlob && wavBlob.size > 0) {
+                                recordedAudioBlob = wavBlob;
+                                console.log('[录音] 已用 WAV 格式, size=', wavBlob.size);
+                            }
+                        } catch (e) {
+                            console.warn('[录音] WAV 编码失败:', e);
+                        }
+                    }
+                    pcmChunks = [];
 
                     stream.getTracks().forEach(track => track.stop());
                     if (animationId) {
                         cancelAnimationFrame(animationId);
                     }
                     document.getElementById('audio-visualizer').innerHTML = '';
+                    hideLevelDisplay();
                     document.getElementById('start-rec-btn').disabled = false;
                     document.getElementById('stop-rec-btn').disabled = true;
                     document.getElementById('rec-status').innerHTML = '就绪';
                     document.getElementById('play-btn').disabled = false;
+                    document.getElementById('download-btn').disabled = false;
 
                     if (recordedAudioBlob.size === 0) {
                         document.getElementById('mic-status').textContent = '录音为空，请录久一点再点停止';
@@ -507,8 +815,8 @@
                     await transcribeRecordedAudio();
                 };
 
-                // 每 200ms 收一次数据，避免只依赖 stop 时的一次数据（更稳定）
-                mediaRecorder.start(200);
+                // 不传 timeslice，停止时只收到一块完整 WebM，避免多块拼接导致无声音/时长错
+                mediaRecorder.start();
 
                 document.getElementById('start-rec-btn').disabled = true;
                 document.getElementById('stop-rec-btn').disabled = false;
@@ -524,54 +832,59 @@
             }
         }
 
-        // 设置音频可视化
+        // 设置音频可视化（依赖 AudioContext 已 resume，否则数据全为 0）
+        let visualizerLogCount = 0;
         function setupAudioVisualizer(stream) {
-            // 确保audioContext已存在
             if (!audioContext) {
-                console.error('AudioContext未初始化');
+                console.error('[可视化] AudioContext 未初始化');
                 return;
             }
-            
-            // 如果分析器已存在，先断开连接
-            if (analyser) {
-                analyser.disconnect();
+            if (audioContext.state === 'suspended') {
+                console.warn('[可视化] AudioContext 仍为 suspended，声波图可能无变化，需在用户点击下 resume');
             }
-            
+
+            if (analyser) {
+                try { analyser.disconnect(); } catch (e) {}
+            }
             analyser = audioContext.createAnalyser();
+            analyser.fftSize = 256;
+            analyser.smoothingTimeConstant = 0.6;
             const source = audioContext.createMediaStreamSource(stream);
             source.connect(analyser);
-            analyser.fftSize = 256;
-            
             const bufferLength = analyser.frequencyBinCount;
             const dataArray = new Uint8Array(bufferLength);
-            
+
+            console.log('[可视化] 已连接 stream, fftSize=256, bufferLength=', bufferLength);
+
             function draw() {
-                if (!analyser) return; // 如果分析器被清除则退出
-                
+                if (!analyser) return;
                 animationId = requestAnimationFrame(draw);
-                
                 analyser.getByteFrequencyData(dataArray);
-                
+                const maxVal = Math.max.apply(null, dataArray);
+                const pct = Math.min(100, Math.round((maxVal / 255) * 100));
+                updateLevelDisplay(maxVal, pct);
+                if (visualizerLogCount < 3 && maxVal > 0) {
+                    console.log('[可视化] 有数据 max=', maxVal);
+                    visualizerLogCount++;
+                }
+
                 const visualizer = document.getElementById('audio-visualizer');
+                const w = visualizer.offsetWidth || 300;
                 visualizer.innerHTML = '';
-                
-                const barWidth = (visualizer.offsetWidth / bufferLength) * 2.5;
-                let barHeight;
-                let x = 0;
-                
+                const barWidth = Math.max(2, (w / bufferLength) - 1);
+                const maxH = visualizer.offsetHeight || 100;
                 for (let i = 0; i < bufferLength; i++) {
-                    barHeight = dataArray[i] / 2;
-                    
                     const bar = document.createElement('div');
                     bar.className = 'visualizer-bar';
+                    const raw = dataArray[i];
+                    const barHeight = Math.max(2, Math.min(maxH, (raw / 255) * maxH));
+                    bar.style.width = barWidth + 'px';
                     bar.style.height = barHeight + 'px';
-                    bar.style.left = x + 'px';
-                    
+                    bar.style.left = (i * (barWidth + 1)) + 'px';
+                    bar.style.background = 'var(--primary-500)';
                     visualizer.appendChild(bar);
-                    x += barWidth + 1;
                 }
             }
-            
             draw();
         }
 
@@ -584,20 +897,46 @@
             }
         }
 
-        // 播放录音
+        // 播放录音（等音频可播后再 play，并保证音量开启）
+        let _currentPlayUrl = null;
         function playRecording() {
-            if (recordedAudioBlob) {
-                const audioUrl = URL.createObjectURL(recordedAudioBlob);
-                const audioPlayer = document.getElementById('audio-player');
-                const playerContainer = document.getElementById('audio-player-container');
-                
-                audioPlayer.src = audioUrl;
-                playerContainer.style.display = 'block';
-                
-                audioPlayer.play().catch(err => {
-                    console.error('播放失败:', err);
-                });
+            if (!recordedAudioBlob) {
+                console.warn('[播放] 无录音 blob');
+                return;
             }
+            const audioPlayer = document.getElementById('audio-player');
+            const playerContainer = document.getElementById('audio-player-container');
+            if (_currentPlayUrl) URL.revokeObjectURL(_currentPlayUrl);
+            _currentPlayUrl = URL.createObjectURL(recordedAudioBlob);
+            audioPlayer.src = _currentPlayUrl;
+            audioPlayer.volume = 1;
+            audioPlayer.muted = false;
+            playerContainer.style.display = 'block';
+            audioPlayer.load();
+            const playWhenReady = () => {
+                audioPlayer.play().then(() => {
+                    console.log('[播放] 已开始');
+                }).catch(err => {
+                    console.error('[播放] 失败:', err);
+                });
+            };
+            if (audioPlayer.readyState >= 2) {
+                playWhenReady();
+            } else {
+                audioPlayer.addEventListener('canplay', playWhenReady, { once: true });
+            }
+        }
+
+        // 下载录音（固定文件名 recording.weba，避免浏览器生成 UUID.weba）
+        function downloadRecording() {
+            if (!recordedAudioBlob || recordedAudioBlob.size === 0) return;
+            const mime = recordedAudioBlob.type || 'audio/webm';
+            const ext = mime.indexOf('wav') !== -1 ? 'wav' : (mime.indexOf('webm') !== -1 ? 'weba' : (mime.indexOf('ogg') !== -1 ? 'ogg' : 'weba'));
+            const a = document.createElement('a');
+            a.href = URL.createObjectURL(recordedAudioBlob);
+            a.download = 'recording.' + ext;
+            a.click();
+            URL.revokeObjectURL(a.href);
         }
 
         // 转录录音
@@ -610,7 +949,7 @@
             statusEl.textContent = '正在转录...';
 
             const mime = recordedAudioBlob.type || 'audio/webm';
-            const ext = mime.indexOf('webm') !== -1 ? 'webm' : (mime.indexOf('ogg') !== -1 ? 'ogg' : 'webm');
+            const ext = mime.indexOf('wav') !== -1 ? 'wav' : (mime.indexOf('webm') !== -1 ? 'webm' : (mime.indexOf('ogg') !== -1 ? 'ogg' : 'webm'));
             const formData = new FormData();
             formData.append('audio', recordedAudioBlob, 'recording.' + ext);
             formData.append('language', document.getElementById('mic-language').value);
