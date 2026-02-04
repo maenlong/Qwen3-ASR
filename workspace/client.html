@@ -590,20 +590,29 @@
             levelPeak = 0;
         }
 
+        // 若正在测试设备，则停止测试（供开始录音时调用，避免测试与录音同时占用）
+        function stopTestDeviceIfActive() {
+            if (!testStream) return;
+            const btn = document.getElementById('test-device-btn');
+            const statusEl = document.getElementById('mic-test-status');
+            const visualizer = document.getElementById('audio-visualizer');
+            testStream.getTracks().forEach(t => t.stop());
+            testStream = null;
+            if (testAnimId) cancelAnimationFrame(testAnimId);
+            testAnimId = null;
+            if (visualizer) visualizer.innerHTML = '';
+            if (statusEl) statusEl.textContent = '';
+            if (btn) btn.textContent = '测试此设备';
+            hideLevelDisplay();
+        }
+
         async function toggleTestDevice() {
             const btn = document.getElementById('test-device-btn');
             const statusEl = document.getElementById('mic-test-status');
             const visualizer = document.getElementById('audio-visualizer');
 
             if (testStream) {
-                testStream.getTracks().forEach(t => t.stop());
-                testStream = null;
-                if (testAnimId) cancelAnimationFrame(testAnimId);
-                testAnimId = null;
-                visualizer.innerHTML = '';
-                statusEl.textContent = '';
-                btn.textContent = '测试此设备';
-                hideLevelDisplay();
+                stopTestDeviceIfActive();
                 return;
             }
 
@@ -701,6 +710,9 @@
         // 开始录音
         async function startRecording() {
             try {
+                // 若正在测试设备，先自动停止，避免测试的语音激励与录音同时存在
+                stopTestDeviceIfActive();
+
                 // 确保 audioContext 已创建，并在用户点击下恢复（浏览器策略：未 resume 时无声音、可视化无数据）
                 if (!audioContext) {
                     audioContext = new (window.AudioContext || window.webkitAudioContext)();
@@ -804,6 +816,8 @@
                     hideLevelDisplay();
                     document.getElementById('start-rec-btn').disabled = false;
                     document.getElementById('stop-rec-btn').disabled = true;
+                    document.getElementById('mic-device').disabled = false;
+                    document.getElementById('test-device-btn').disabled = false;
                     document.getElementById('rec-status').innerHTML = '就绪';
                     document.getElementById('play-btn').disabled = false;
                     document.getElementById('download-btn').disabled = false;
@@ -820,6 +834,8 @@
 
                 document.getElementById('start-rec-btn').disabled = true;
                 document.getElementById('stop-rec-btn').disabled = false;
+                document.getElementById('mic-device').disabled = true;
+                document.getElementById('test-device-btn').disabled = true;
                 document.getElementById('rec-status').innerHTML = '<span class="recording-indicator"></span>正在录音...';
             } catch (err) {
                 console.error('无法访问麦克风:', err);
