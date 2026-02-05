@@ -1,5 +1,7 @@
 import os
 os.environ['CUDA_VISIBLE_DEVICES'] = ''
+# 未设置时默认用国内镜像，避免容器内连 huggingface.co 超时；已设置则保留
+os.environ.setdefault('HF_ENDPOINT', 'https://hf-mirror.com')
 import torch
 torch.cuda.is_available = lambda: False
 

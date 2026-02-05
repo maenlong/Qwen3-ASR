@@ -160,6 +160,12 @@
             background: var(--neutral-400);
             cursor: not-allowed;
         }
+        button.btn-stop {
+            background: #dc2626;
+        }
+        button.btn-stop:hover {
+            background: #b91c1c;
+        }
         
         .btn-row {
             display: flex;
@@ -233,6 +239,7 @@
             display: flex;
             align-items: center;
             gap: 8px;
+            min-height: 24px;   /* 固定占位，避免开始录音时页面跳动 */
         }
         .visualizer-level-num {
             font-weight: 700;
@@ -292,6 +299,66 @@
             flex: 0 0 auto;
         }
 
+        .mode-switch {
+            display: flex;
+            width: 100%;
+            gap: 0;
+            background: var(--neutral-200);
+            border-radius: 8px;
+            padding: 3px;
+            border: 1px solid var(--neutral-300);
+        }
+        .mode-switch .mode-btn {
+            flex: 1 1 0;
+            min-width: 100px;
+            padding: 8px 16px;
+            border: none;
+            border-radius: 6px;
+            font-size: 14px;
+            font-weight: 500;
+            background: transparent;
+            color: var(--neutral-600);
+            cursor: pointer;
+            transition: background 0.15s ease, color 0.15s ease;
+        }
+        .mode-switch .mode-btn:hover:not(.active):not(:disabled) {
+            background: var(--neutral-100);
+            color: var(--neutral-800);
+        }
+        .mode-switch .mode-btn.active {
+            background: white;
+            color: var(--primary-600);
+            box-shadow: 0 1px 2px rgba(0,0,0,0.06);
+        }
+        .mode-switch .mode-btn:disabled {
+            opacity: 0.7;
+            cursor: not-allowed;
+            background: transparent !important;
+        }
+        .mode-switch .mode-btn.active:disabled {
+            background: white !important;
+        }
+
+        .mic-visualizer-common {
+            margin-top: 4px;
+        }
+        .mic-panel-status {
+            font-size: 14px;
+            color: var(--neutral-600);
+        }
+        .rec-status-row {
+            align-items: center;
+        }
+        .rec-status-inline {
+            margin-left: 12px;
+            flex-shrink: 0;
+        }
+        /* 测试状态提示固定占位，避免「测试中：请大声说…」出现时界面跳动 */
+        .mic-test-status-fixed {
+            min-height: 2.8em;
+            line-height: 1.4;
+        }
+
         /* 自适应：手机竖屏 */
         @media (max-width: 640px) {
             body { padding: 8px; }
@@ -331,7 +398,7 @@
         
         <div class="tabs">
             <button class="tab-button active" data-tab="upload">上传音频</button>
-            <button class="tab-button" data-tab="microphone">麦克风录音</button>
+            <button class="tab-button" data-tab="microphone">麦克风</button>
         </div>
         
         <div class="tab-content active" id="upload-tab">
@@ -382,11 +449,26 @@
                             <button type="button" id="test-device-btn" class="test-btn" title="试听当前设备，看电平条是否随说话动">测试此设备</button>
                         </div>
                         <div id="mic-device-hint" style="margin-top: 4px; font-size: 12px; color: var(--neutral-500); min-height: 16px;"></div>
-                        <div id="mic-test-status" style="margin-top: 4px; font-size: 12px; color: var(--primary-600); min-height: 16px;"></div>
+                        <div id="mic-test-status" class="mic-test-status-fixed" style="margin-top: 4px; font-size: 12px; color: var(--primary-600);"></div>
+                    </div>
+
+                    <div class="form-group mic-visualizer-common">
+                        <label>语音激励</label>
+                        <div class="visualizer-wrap">
+                            <div class="visualizer-level" id="visualizer-level-wrap">
+                                <span class="visualizer-level-num" id="visualizer-level-num">0%</span>
+                                <span>当前</span>
+                                <div class="visualizer-level-bar-bg">
+                                    <div class="visualizer-level-bar-fill" id="visualizer-level-bar"></div>
+                                </div>
+                                <span class="visualizer-level-peak" id="visualizer-level-peak">峰值 0%</span>
+                            </div>
+                            <div class="visualizer" id="audio-visualizer"></div>
+                        </div>
                     </div>
                     
                     <div class="form-group">
-                        <label for="mic-language">指定语言（设为None则自动检测）</label>
+                        <label for="mic-language">指定语言（设为 None 则自动检测）</label>
                         <select id="mic-language">
                             <option value="auto">自动检测</option>
                             <option value="zh">中文</option>
@@ -399,42 +481,50 @@
                             <option value="es">西班牙语</option>
                         </select>
                     </div>
-                    
-                    <div class="btn-row">
-                        <button id="start-rec-btn">开始录音</button>
-                        <button id="stop-rec-btn" disabled>停止录音</button>
+
+                    <div class="form-group">
+                        <label>模式</label>
+                        <div class="btn-row mode-switch">
+                            <button type="button" class="mode-btn active" data-mode="record">录音转写</button>
+                            <button type="button" class="mode-btn" data-mode="live">实时转写</button>
+                        </div>
                     </div>
-                    
-                    <div class="form-group" style="margin-top: 15px;">
-                        <div id="rec-status">就绪</div>
-                        <div class="visualizer-wrap">
-                            <div class="visualizer-level" id="visualizer-level-wrap" style="display: none;">
-                                <span class="visualizer-level-num" id="visualizer-level-num">0%</span>
-                                <span>当前</span>
-                                <div class="visualizer-level-bar-bg">
-                                    <div class="visualizer-level-bar-fill" id="visualizer-level-bar"></div>
-                                </div>
-                                <span class="visualizer-level-peak" id="visualizer-level-peak">峰值 0%</span>
+
+                    <div id="mic-mode-record" class="mic-mode-panel">
+                        <div class="btn-row rec-status-row">
+                            <button type="button" id="toggle-rec-btn">开始录音</button>
+                            <span id="rec-status" class="mic-panel-status rec-status-inline">就绪</span>
+                        </div>
+                        <div class="form-group recording-actions">
+                            <label>录音回放</label>
+                            <div class="btn-row">
+                                <button id="play-btn" disabled>播放录音</button>
+                                <button id="download-btn" disabled title="录音结束后可下载">下载录音</button>
                             </div>
-                            <div class="visualizer" id="audio-visualizer"></div>
+                            <div class="audio-player-inner" id="audio-player-container" style="display: none;">
+                                <audio id="audio-player" controls></audio>
+                            </div>
                         </div>
                     </div>
-                    
-                    <div class="form-group recording-actions">
-                        <label>录音回放</label>
-                        <div class="btn-row">
-                            <button id="play-btn" disabled>播放录音</button>
-                            <button id="download-btn" disabled title="录音结束后可下载">下载录音</button>
+
+                    <div id="mic-mode-live" class="mic-mode-panel" style="display: none;">
+                        <div class="form-group">
+                            <label for="live-chunk-seconds">转写间隔</label>
+                            <select id="live-chunk-seconds">
+                                <option value="5">每 5 秒</option>
+                                <option value="10" selected>每 10 秒</option>
+                                <option value="30">每 30 秒</option>
+                                <option value="60">每 60 秒</option>
+                            </select>
                         </div>
-                        <div class="audio-player-inner" id="audio-player-container" style="display: none;">
-                            <audio id="audio-player" controls></audio>
+                        <div class="btn-row">
+                            <button type="button" id="toggle-live-btn">开始实时转写</button>
                         </div>
                     </div>
                 </div>
-                
                 <div class="column">
                     <label>转录结果</label>
-                    <textarea id="mic-result" readonly placeholder="转录结果将显示在这里..."></textarea>
+                    <textarea id="mic-result" readonly placeholder="录音结束后或实时转写过程中，转录结果将显示在这里..."></textarea>
                     <div class="status-bar" id="mic-status">就绪</div>
                 </div>
             </div>
@@ -444,6 +534,8 @@
     <script>
         // API 地址：若你的服务映射到其它端口，改这里（与 WSL Docker -p 一致）
         const API_BASE = 'http://localhost:8000';
+        // vLLM 流式实时转写（需 NVIDIA GPU）。留空则用 API_BASE 做分段 WAV 转写（适合无 GPU）
+        const STREAMING_API_BASE = '';
 
         // 全局变量
         let mediaRecorder;
@@ -586,6 +678,7 @@
 
         // 是否已在麦克风标签内请求过权限并拉取过设备列表
         let micTabDeviceListLoaded = false;
+        let micMode = 'record';
 
         // 初始化
         async function init() {
@@ -613,6 +706,25 @@
                 });
             });
 
+            document.querySelectorAll('.mode-btn').forEach(btn => {
+                btn.addEventListener('click', () => {
+                    const mode = btn.getAttribute('data-mode');
+                    if (micMode === mode) return;
+                    if (mode === 'live') {
+                        if (mediaRecorder && mediaRecorder.state !== 'inactive') stopRecording();
+                        stopLiveTranscribe();
+                    } else {
+                        stopLiveTranscribe();
+                    }
+                    micMode = mode;
+                    document.querySelectorAll('.mode-btn').forEach(b => b.classList.remove('active'));
+                    btn.classList.add('active');
+                    document.getElementById('mic-mode-record').style.display = mode === 'record' ? 'block' : 'none';
+                    document.getElementById('mic-mode-live').style.display = mode === 'live' ? 'block' : 'none';
+                    document.getElementById('mic-status').textContent = mode === 'record' ? '就绪' : '就绪。选择「开始实时转写」后按间隔发送音频并追加结果。';
+                });
+            });
+
             setupEventListeners();
         }
 
@@ -625,9 +737,15 @@
             
             document.getElementById('upload-btn').addEventListener('click', handleUpload);
             
-            // 麦克风标签
-            document.getElementById('start-rec-btn').addEventListener('click', startRecording);
-            document.getElementById('stop-rec-btn').addEventListener('click', stopRecording);
+            // 麦克风标签：录音/实时各一个互斥按钮
+            document.getElementById('toggle-rec-btn').addEventListener('click', () => {
+                if (mediaRecorder && mediaRecorder.state !== 'inactive') stopRecording();
+                else startRecording();
+            });
+            document.getElementById('toggle-live-btn').addEventListener('click', () => {
+                if (liveStream) stopLiveTranscribe();
+                else startLiveTranscribe();
+            });
             document.getElementById('play-btn').addEventListener('click', playRecording);
             document.getElementById('download-btn').addEventListener('click', downloadRecording);
             document.getElementById('test-device-btn').addEventListener('click', toggleTestDevice);
@@ -638,14 +756,13 @@
 
         let levelPeak = 0;
 
-        // 更新音量条和数字；peakPct 为本次录音/测试以来的峰值，便于对比不同设备
+        // 更新音量条和数字；peakPct 为本次录音/测试以来的峰值，便于对比不同设备（区块始终占位，不切换 display 以免页面跳动）
         function updateLevelDisplay(rawMax, peakPct) {
             const wrap = document.getElementById('visualizer-level-wrap');
             const numEl = document.getElementById('visualizer-level-num');
             const barEl = document.getElementById('visualizer-level-bar');
             const peakEl = document.getElementById('visualizer-level-peak');
             if (!wrap || !numEl || !barEl) return;
-            wrap.style.display = 'flex';
             const pct = Math.min(100, Math.round((rawMax / 255) * 100));
             if (peakPct != null) levelPeak = Math.max(levelPeak, peakPct);
             numEl.textContent = pct + '%';
@@ -653,10 +770,12 @@
             if (peakEl) peakEl.textContent = '峰值 ' + levelPeak + '%';
         }
         function hideLevelDisplay() {
-            const wrap = document.getElementById('visualizer-level-wrap');
-            if (wrap) wrap.style.display = 'none';
+            const numEl = document.getElementById('visualizer-level-num');
             const bar = document.getElementById('visualizer-level-bar');
+            const peakEl = document.getElementById('visualizer-level-peak');
+            if (numEl) numEl.textContent = '0%';
             if (bar) bar.style.width = '0%';
+            if (peakEl) peakEl.textContent = '峰值 0%';
             levelPeak = 0;
         }
         function resetLevelPeak() {
@@ -737,6 +856,268 @@
                 statusEl.textContent = '无法打开设备: ' + e.message;
                 btn.textContent = '测试此设备';
             }
+        }
+
+        // ---------- 实时字幕：vLLM 流式（STREAMING_API_BASE）或分段 WAV 转写（API_BASE） ----------
+        const LIVE_CHUNK_MS = 500;
+        const LIVE_TARGET_SR = 16000;
+        let liveStream = null;
+        let liveAudioContext = null;
+        let liveScriptProcessor = null;
+        let livePcmBuffer = [];
+        let liveChunkIntervalId = null;
+        let liveSourceNode = null;
+        let liveSessionId = null;
+        let liveRunning = false;
+        let liveBuf = new Float32Array(0);
+        let livePushing = false;
+        let liveChunkSending = false;
+        let liveVisualizerAnimId = null;
+        let liveAnalyser = null;
+        let liveVisualizerSource = null;
+
+        function resampleLinear(input, srcSr, dstSr) {
+            if (srcSr === dstSr) return input;
+            const ratio = dstSr / srcSr;
+            const outLen = Math.max(0, Math.round(input.length * ratio));
+            const out = new Float32Array(outLen);
+            for (let i = 0; i < outLen; i++) {
+                const x = i / ratio;
+                const x0 = Math.floor(x);
+                const x1 = Math.min(x0 + 1, input.length - 1);
+                const t = x - x0;
+                out[i] = input[x0] * (1 - t) + input[x1] * t;
+            }
+            return out;
+        }
+        function concatFloat32(a, b) {
+            const out = new Float32Array(a.length + b.length);
+            out.set(a, 0);
+            out.set(b, a.length);
+            return out;
+        }
+
+        async function startLiveTranscribe() {
+            const deviceId = document.getElementById('mic-device').value;
+            const language = document.getElementById('mic-language').value;
+            const chunkSec = parseInt(document.getElementById('live-chunk-seconds').value, 10) || 10;
+            const statusEl = document.getElementById('mic-status');
+            const transcriptEl = document.getElementById('mic-result');
+            const segmentEl = document.getElementById('mic-status');
+            const useStreaming = !!STREAMING_API_BASE;
+
+            stopTestDeviceIfActive();
+            if (liveStream) {
+                stopLiveTranscribe();
+                return;
+            }
+
+            if (useStreaming) {
+                try {
+                    const startUrl = STREAMING_API_BASE + '/api/start';
+                    const startRes = await fetch(startUrl, {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ language: language || 'auto' })
+                    });
+                    if (!startRes.ok) throw new Error(await startRes.text());
+                    const j = await startRes.json();
+                    liveSessionId = j.session_id;
+                } catch (e) {
+                    statusEl.textContent = '流式服务连接失败（请确认 ' + STREAMING_API_BASE + ' 已启动）: ' + e.message;
+                    return;
+                }
+            }
+
+            try {
+                const constraints = { audio: deviceId ? { deviceId: { exact: deviceId } } : true };
+                liveStream = await navigator.mediaDevices.getUserMedia(constraints);
+            } catch (e) {
+                statusEl.textContent = '无法打开麦克风: ' + e.message;
+                if (liveSessionId) liveSessionId = null;
+                return;
+            }
+
+            document.querySelectorAll('.mode-btn').forEach(b => { b.disabled = true; });
+
+            if (!liveAudioContext) liveAudioContext = new (window.AudioContext || window.webkitAudioContext)();
+            if (liveAudioContext.state === 'suspended') await liveAudioContext.resume();
+            const ctx = liveAudioContext;
+            const bufferSize = 4096;
+            liveScriptProcessor = ctx.createScriptProcessor(bufferSize, 1, 1);
+            liveSourceNode = liveAudioContext.createMediaStreamSource(liveStream);
+
+            const chunkSamples = Math.round(LIVE_TARGET_SR * (LIVE_CHUNK_MS / 1000));
+
+            if (useStreaming) {
+                livePcmBuffer = [];
+                liveBuf = new Float32Array(0);
+                liveRunning = true;
+                livePushing = false;
+                const segmentElRef = segmentEl;
+                const transcriptElRef = transcriptEl;
+                async function pumpStreaming() {
+                    if (livePushing || !liveRunning) return;
+                    livePushing = true;
+                    try {
+                        while (liveRunning && liveBuf.length >= chunkSamples) {
+                            const chunk = liveBuf.slice(0, chunkSamples);
+                            liveBuf = liveBuf.slice(chunkSamples);
+                            const r = await fetch(STREAMING_API_BASE + '/api/chunk?session_id=' + encodeURIComponent(liveSessionId), {
+                                method: 'POST',
+                                headers: { 'Content-Type': 'application/octet-stream' },
+                                body: chunk.buffer
+                            });
+                            if (!r.ok) throw new Error(await r.text());
+                            const j = await r.json();
+                            if (segmentElRef) segmentElRef.textContent = (j.language ? '语言: ' + j.language + ' | ' : '') + (j.text ? '已更新' : '');
+                            transcriptElRef.value = j.text || '';
+                        }
+                    } catch (err) {
+                        if (liveRunning) segmentElRef.textContent = '流式转写错误: ' + err.message;
+                    } finally {
+                        livePushing = false;
+                    }
+                }
+                liveScriptProcessor.onaudioprocess = (e) => {
+                    if (!liveRunning) return;
+                    const input = e.inputBuffer.getChannelData(0);
+                    const resampled = resampleLinear(input, ctx.sampleRate, LIVE_TARGET_SR);
+                    liveBuf = concatFloat32(liveBuf, resampled);
+                    if (!livePushing) pumpStreaming();
+                };
+                const liveGain = ctx.createGain();
+                liveGain.gain.value = 0;
+                liveSourceNode.connect(liveScriptProcessor);
+                liveScriptProcessor.connect(liveGain);
+                liveGain.connect(ctx.destination);
+                setupLiveVisualizer(liveStream, ctx);
+                document.getElementById('rec-status').textContent = '实时转写中';
+                transcriptEl.value = '';
+                segmentEl.textContent = '';
+                statusEl.textContent = 'vLLM 流式转写中（约 500ms 更新）。';
+            } else {
+                // ---------- 分段式：按间隔采集 PCM → 编码 WAV → POST /transcribe，结果追加到文本框 ----------
+                liveRunning = true;
+                livePcmBuffer = [];
+                liveChunkSending = false;
+                const liveGain = ctx.createGain();
+                liveGain.gain.value = 0;
+                liveSourceNode.connect(liveScriptProcessor);
+                liveScriptProcessor.connect(liveGain);
+                liveGain.connect(ctx.destination);
+                liveScriptProcessor.onaudioprocess = (e) => {
+                    if (!liveStream || !liveStream.active) return;
+                    const input = e.inputBuffer.getChannelData(0);
+                    livePcmBuffer.push(new Float32Array(input));
+                };
+
+                const sendChunk = async () => {
+                    if (!liveStream || !liveStream.active) return;
+                    if (liveChunkSending) return;
+                    if (livePcmBuffer.length === 0) return;
+
+                    const chunks = livePcmBuffer.splice(0, livePcmBuffer.length);
+                    const wavBlob = encodePCMToWav(chunks, ctx.sampleRate);
+                    if (wavBlob.size < 1000) {
+                        for (let i = 0; i < chunks.length; i++) livePcmBuffer.push(chunks[i]);
+                        return;
+                    }
+
+                    liveChunkSending = true;
+                    segmentEl.textContent = '正在转写本段…';
+                    try {
+                        const formData = new FormData();
+                        formData.append('audio', wavBlob, 'chunk.wav');
+                        formData.append('language', language);
+                        const response = await fetch(API_BASE + '/transcribe', { method: 'POST', body: formData });
+                        const result = await response.json();
+                        if (result.success && result.text != null) {
+                            const text = result.text.trim();
+                            if (text) {
+                                const existing = transcriptEl.value;
+                                transcriptEl.value = existing ? existing + text : text;
+                                segmentEl.textContent = '已追加: ' + (text.length > 25 ? text.slice(0, 25) + '…' : text);
+                            } else {
+                                segmentEl.textContent = '本段无识别结果';
+                            }
+                        } else {
+                            segmentEl.textContent = '本段失败: ' + (result.error || '未知错误');
+                        }
+                    } catch (err) {
+                        const msg = err.message || '网络错误';
+                        segmentEl.textContent = '本段转写失败: ' + msg;
+                        if (msg === 'Failed to fetch') {
+                            segmentEl.textContent += '（请确认 ' + API_BASE + ' 已启动）';
+                        }
+                    } finally {
+                        liveChunkSending = false;
+                    }
+                };
+
+                liveChunkIntervalId = setInterval(sendChunk, chunkSec * 1000);
+                setupLiveVisualizer(liveStream, ctx);
+                document.getElementById('rec-status').textContent = '实时转写中';
+                transcriptEl.value = '';
+                segmentEl.textContent = '';
+                statusEl.textContent = '分段转写中：每 ' + chunkSec + ' 秒发送一段音频并追加转写结果。';
+            }
+
+            const liveBtn = document.getElementById('toggle-live-btn');
+            liveBtn.textContent = '停止';
+            liveBtn.classList.add('btn-stop');
+            document.getElementById('mic-device').disabled = true;
+            document.getElementById('mic-language').disabled = true;
+            document.getElementById('live-chunk-seconds').disabled = true;
+        }
+
+        async function stopLiveTranscribe() {
+            const statusEl = document.getElementById('mic-status');
+            const transcriptEl = document.getElementById('mic-result');
+
+            liveRunning = false;
+            stopLiveVisualizer();
+            document.getElementById('rec-status').textContent = '就绪';
+            if (liveChunkIntervalId) {
+                clearInterval(liveChunkIntervalId);
+                liveChunkIntervalId = null;
+            }
+            if (liveSessionId) {
+                try {
+                    const r = await fetch(STREAMING_API_BASE + '/api/finish?session_id=' + encodeURIComponent(liveSessionId), { method: 'POST' });
+                    if (r.ok) {
+                        const j = await r.json();
+                        transcriptEl.value = j.text || '';
+                        statusEl.textContent = (j.language ? '语言: ' + j.language + ' | ' : '') + '已收尾';
+                    }
+                } catch (e) {
+                    statusEl.textContent = '收尾请求失败: ' + e.message;
+                }
+                liveSessionId = null;
+            }
+            if (liveScriptProcessor && liveAudioContext) {
+                try {
+                    liveScriptProcessor.disconnect();
+                    if (liveSourceNode) liveSourceNode.disconnect();
+                } catch (e) {}
+            }
+            liveScriptProcessor = null;
+            liveSourceNode = null;
+            if (liveStream) {
+                liveStream.getTracks().forEach(t => t.stop());
+                liveStream = null;
+            }
+            livePcmBuffer = [];
+            liveBuf = new Float32Array(0);
+            liveChunkSending = false;
+            const liveBtn = document.getElementById('toggle-live-btn');
+            liveBtn.textContent = '开始实时转写';
+            liveBtn.classList.remove('btn-stop');
+            document.getElementById('mic-device').disabled = false;
+            document.getElementById('mic-language').disabled = false;
+            document.getElementById('live-chunk-seconds').disabled = false;
+            document.querySelectorAll('.mode-btn').forEach(b => { b.disabled = false; });
+            statusEl.textContent = '已停止。可再次点击「开始实时转写」。';
         }
 
         // 处理上传
@@ -887,36 +1268,55 @@
                     }
                     document.getElementById('audio-visualizer').innerHTML = '';
                     hideLevelDisplay();
-                    document.getElementById('start-rec-btn').disabled = false;
-                    document.getElementById('stop-rec-btn').disabled = true;
+                    const recBtn = document.getElementById('toggle-rec-btn');
+                    recBtn.textContent = '开始录音';
+                    recBtn.classList.remove('btn-stop');
+                    recBtn.disabled = false;
                     document.getElementById('mic-device').disabled = false;
                     document.getElementById('test-device-btn').disabled = false;
+                    document.querySelectorAll('.mode-btn').forEach(b => { b.disabled = false; });
                     document.getElementById('rec-status').innerHTML = '就绪';
-                    document.getElementById('play-btn').disabled = false;
-                    document.getElementById('download-btn').disabled = false;
 
                     if (recordedAudioBlob.size === 0) {
                         document.getElementById('mic-status').textContent = '录音为空，请录久一点再点停止';
+                        document.getElementById('play-btn').disabled = true;
+                        document.getElementById('download-btn').disabled = true;
                         return;
                     }
+                    document.getElementById('play-btn').disabled = false;
+                    document.getElementById('download-btn').disabled = false;
                     await transcribeRecordedAudio();
                 };
 
                 // 不传 timeslice，停止时只收到一块完整 WebM，避免多块拼接导致无声音/时长错
                 mediaRecorder.start();
 
-                document.getElementById('start-rec-btn').disabled = true;
-                document.getElementById('stop-rec-btn').disabled = false;
+                document.getElementById('play-btn').disabled = true;
+                document.getElementById('download-btn').disabled = true;
+                const audioPlayer = document.getElementById('audio-player');
+                if (audioPlayer && !audioPlayer.paused) {
+                    audioPlayer.pause();
+                    audioPlayer.removeAttribute('src');
+                    audioPlayer.load();
+                }
+                if (_currentPlayUrl) {
+                    URL.revokeObjectURL(_currentPlayUrl);
+                    _currentPlayUrl = null;
+                }
+
+                const recBtn = document.getElementById('toggle-rec-btn');
+                recBtn.textContent = '停止录音';
+                recBtn.classList.add('btn-stop');
                 document.getElementById('mic-device').disabled = true;
                 document.getElementById('test-device-btn').disabled = true;
+                document.querySelectorAll('.mode-btn').forEach(b => { b.disabled = true; });
                 document.getElementById('rec-status').innerHTML = '<span class="recording-indicator"></span>正在录音...';
             } catch (err) {
                 console.error('无法访问麦克风:', err);
                 document.getElementById('mic-status').textContent = '无法访问麦克风: ' + err.message;
-                
-                // 更新UI状态
-                document.getElementById('start-rec-btn').disabled = false;
-                document.getElementById('stop-rec-btn').disabled = true;
+                document.getElementById('toggle-rec-btn').textContent = '开始录音';
+                document.getElementById('toggle-rec-btn').classList.remove('btn-stop');
+                document.querySelectorAll('.mode-btn').forEach(b => { b.disabled = false; });
                 document.getElementById('rec-status').textContent = '无法访问麦克风: ' + err.message;
             }
         }
@@ -977,12 +1377,71 @@
             draw();
         }
 
+        // 实时转写时驱动共用语音激励条（与 setupAudioVisualizer 共用 DOM）
+        function setupLiveVisualizer(stream, ctx) {
+            if (!ctx || !stream) return;
+            if (liveVisualizerAnimId) cancelAnimationFrame(liveVisualizerAnimId);
+            if (liveAnalyser) {
+                try { liveAnalyser.disconnect(); } catch (e) {}
+                if (liveVisualizerSource) try { liveVisualizerSource.disconnect(); } catch (e) {}
+            }
+            resetLevelPeak();
+            liveVisualizerSource = ctx.createMediaStreamSource(stream);
+            liveAnalyser = ctx.createAnalyser();
+            liveAnalyser.fftSize = 256;
+            liveAnalyser.smoothingTimeConstant = 0.6;
+            liveVisualizerSource.connect(liveAnalyser);
+            const bufferLength = liveAnalyser.frequencyBinCount;
+            const dataArray = new Uint8Array(bufferLength);
+
+            function draw() {
+                if (!liveAnalyser || !liveRunning) return;
+                liveVisualizerAnimId = requestAnimationFrame(draw);
+                liveAnalyser.getByteFrequencyData(dataArray);
+                const maxVal = Math.max.apply(null, dataArray);
+                const pct = Math.min(100, Math.round((maxVal / 255) * 100));
+                updateLevelDisplay(maxVal, pct);
+                const visualizer = document.getElementById('audio-visualizer');
+                const w = visualizer.offsetWidth || 300;
+                visualizer.innerHTML = '';
+                const barWidth = Math.max(2, (w / bufferLength) - 1);
+                const maxH = visualizer.offsetHeight || 100;
+                for (let i = 0; i < bufferLength; i++) {
+                    const bar = document.createElement('div');
+                    bar.className = 'visualizer-bar';
+                    const raw = dataArray[i];
+                    const barHeight = Math.max(2, Math.min(maxH, (raw / 255) * maxH));
+                    bar.style.width = barWidth + 'px';
+                    bar.style.height = barHeight + 'px';
+                    bar.style.left = (i * (barWidth + 1)) + 'px';
+                    bar.style.background = 'var(--primary-500)';
+                    visualizer.appendChild(bar);
+                }
+            }
+            draw();
+        }
+        function stopLiveVisualizer() {
+            if (liveVisualizerAnimId) {
+                cancelAnimationFrame(liveVisualizerAnimId);
+                liveVisualizerAnimId = null;
+            }
+            if (liveAnalyser) {
+                try { liveAnalyser.disconnect(); } catch (e) {}
+                liveAnalyser = null;
+            }
+            if (liveVisualizerSource) {
+                try { liveVisualizerSource.disconnect(); } catch (e) {}
+                liveVisualizerSource = null;
+            }
+            document.getElementById('audio-visualizer').innerHTML = '';
+            hideLevelDisplay();
+        }
+
         // 停止录音
         function stopRecording() {
             if (mediaRecorder && mediaRecorder.state !== 'inactive') {
                 mediaRecorder.stop();
-                document.getElementById('stop-rec-btn').disabled = true;
-                document.getElementById('start-rec-btn').disabled = false;
+                document.getElementById('toggle-rec-btn').disabled = true;
             }
         }
 
