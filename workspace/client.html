@@ -295,9 +295,6 @@
             flex: 1 1 180px;
             min-width: 0;
         }
-        .device-row .test-btn {
-            flex: 0 0 auto;
-        }
 
         .mode-switch {
             display: flex;
@@ -345,13 +342,6 @@
         .mic-panel-status {
             font-size: 14px;
             color: var(--neutral-600);
-        }
-        .rec-status-row {
-            align-items: center;
-        }
-        .rec-status-inline {
-            margin-left: 12px;
-            flex-shrink: 0;
         }
         /* 测试状态提示固定占位，避免「测试中：请大声说…」出现时界面跳动 */
         .mic-test-status-fixed {
@@ -407,8 +397,14 @@
                     <div class="form-group">
                         <label for="audio-upload">上传音频文件</label>
                         <input type="file" id="audio-upload" accept="audio/*" style="display: none;">
-                        <button type="button" onclick="document.getElementById('audio-upload').click()">选择音频文件</button>
+                        <div class="btn-row">
+                            <button type="button" onclick="document.getElementById('audio-upload').click()">选择音频文件</button>
+                            <button type="button" id="upload-play-btn" disabled title="先选择文件后可播放">播放</button>
+                        </div>
                         <div id="file-name" style="margin-top: 5px; font-size: 12px; color: var(--neutral-500);"></div>
+                        <div class="audio-player-inner" id="upload-audio-container" style="display: none; margin-top: 8px;">
+                            <audio id="upload-audio-player" controls></audio>
+                        </div>
                     </div>
                     
                     <div class="form-group">
@@ -446,7 +442,6 @@
                             <select id="mic-device">
                                 <option value="">使用系统默认</option>
                             </select>
-                            <button type="button" id="test-device-btn" class="test-btn" title="试听当前设备，看电平条是否随说话动">测试此设备</button>
                         </div>
                         <div id="mic-device-hint" style="margin-top: 4px; font-size: 12px; color: var(--neutral-500); min-height: 16px;"></div>
                         <div id="mic-test-status" class="mic-test-status-fixed" style="margin-top: 4px; font-size: 12px; color: var(--primary-600);"></div>
@@ -491,15 +486,11 @@
                     </div>
 
                     <div id="mic-mode-record" class="mic-mode-panel">
-                        <div class="btn-row rec-status-row">
-                            <button type="button" id="toggle-rec-btn">开始录音</button>
-                            <span id="rec-status" class="mic-panel-status rec-status-inline">就绪</span>
-                        </div>
                         <div class="form-group recording-actions">
-                            <label>录音回放</label>
+                            <label>录音与回放</label>
                             <div class="btn-row">
+                                <button type="button" id="toggle-rec-btn">开始录音</button>
                                 <button id="play-btn" disabled>播放录音</button>
-                                <button id="download-btn" disabled title="录音结束后可下载">下载录音</button>
                             </div>
                             <div class="audio-player-inner" id="audio-player-container" style="display: none;">
                                 <audio id="audio-player" controls></audio>
@@ -702,6 +693,7 @@
                     if (tabId === 'microphone' && isSecureContext() && !micTabDeviceListLoaded) {
                         micTabDeviceListLoaded = true;
                         await populateDeviceList(true);
+                        await startPreviewForDevice();
                     }
                 });
             });
@@ -731,11 +723,26 @@
         function setupEventListeners() {
             // 上传标签
             document.getElementById('audio-upload').addEventListener('change', function(e) {
-                const fileName = e.target.files[0]?.name || '';
-                document.getElementById('file-name').textContent = fileName || '未选择文件';
+                const file = e.target.files[0] || null;
+                uploadCurrentFile = file;
+                if (uploadPlayUrl) {
+                    URL.revokeObjectURL(uploadPlayUrl);
+                    uploadPlayUrl = null;
+                }
+                const audioEl = document.getElementById('upload-audio-player');
+                const container = document.getElementById('upload-audio-container');
+                if (audioEl) {
+                    audioEl.pause();
+                    audioEl.removeAttribute('src');
+                    audioEl.load();
+                }
+                if (container) container.style.display = 'none';
+                document.getElementById('file-name').textContent = file ? file.name : '未选择文件';
+                document.getElementById('upload-play-btn').disabled = !file;
             });
             
             document.getElementById('upload-btn').addEventListener('click', handleUpload);
+            document.getElementById('upload-play-btn').addEventListener('click', playUploadedAudio);
             
             // 麦克风标签：录音/实时各一个互斥按钮
             document.getElementById('toggle-rec-btn').addEventListener('click', () => {
@@ -747,8 +754,7 @@
                 else startLiveTranscribe();
             });
             document.getElementById('play-btn').addEventListener('click', playRecording);
-            document.getElementById('download-btn').addEventListener('click', downloadRecording);
-            document.getElementById('test-device-btn').addEventListener('click', toggleTestDevice);
+            document.getElementById('mic-device').addEventListener('change', startPreviewForDevice);
         }
 
         let testStream = null;
@@ -783,9 +789,8 @@
         }
 
         // 若正在测试设备，则停止测试（供开始录音时调用，避免测试与录音同时占用）
-        function stopTestDeviceIfActive() {
+        function stopPreviewStream() {
             if (!testStream) return;
-            const btn = document.getElementById('test-device-btn');
             const statusEl = document.getElementById('mic-test-status');
             const visualizer = document.getElementById('audio-visualizer');
             testStream.getTracks().forEach(t => t.stop());
@@ -794,29 +799,21 @@
             testAnimId = null;
             if (visualizer) visualizer.innerHTML = '';
             if (statusEl) statusEl.textContent = '';
-            if (btn) btn.textContent = '测试此设备';
             hideLevelDisplay();
         }
 
-        async function toggleTestDevice() {
-            const btn = document.getElementById('test-device-btn');
+        async function startPreviewForDevice() {
             const statusEl = document.getElementById('mic-test-status');
             const visualizer = document.getElementById('audio-visualizer');
-
-            if (testStream) {
-                stopTestDeviceIfActive();
-                return;
-            }
-
-            btn.textContent = '停止测试';
+            stopPreviewStream();
+            if (!visualizer) return;
             statusEl.textContent = '正在打开设备…';
             const deviceId = document.getElementById('mic-device').value;
             const constraints = { audio: deviceId ? { deviceId: { exact: deviceId } } : true };
-
             try {
                 testStream = await navigator.mediaDevices.getUserMedia(constraints);
                 resetLevelPeak();
-                statusEl.textContent = '测试中：请大声说一句话，看「峰值」数字 — 换设备再测，峰值最高的就是最灵敏的';
+                statusEl.textContent = '';
                 if (!audioContext) audioContext = new (window.AudioContext || window.webkitAudioContext)();
                 if (audioContext.state === 'suspended') await audioContext.resume();
                 const ctx = audioContext;
@@ -854,7 +851,6 @@
                 draw();
             } catch (e) {
                 statusEl.textContent = '无法打开设备: ' + e.message;
-                btn.textContent = '测试此设备';
             }
         }
 
@@ -906,7 +902,7 @@
             const segmentEl = document.getElementById('mic-status');
             const useStreaming = !!STREAMING_API_BASE;
 
-            stopTestDeviceIfActive();
+            stopPreviewStream();
             if (liveStream) {
                 stopLiveTranscribe();
                 return;
@@ -992,7 +988,6 @@
                 liveScriptProcessor.connect(liveGain);
                 liveGain.connect(ctx.destination);
                 setupLiveVisualizer(liveStream, ctx);
-                document.getElementById('rec-status').textContent = '实时转写中';
                 transcriptEl.value = '';
                 segmentEl.textContent = '';
                 statusEl.textContent = 'vLLM 流式转写中（约 500ms 更新）。';
@@ -1057,7 +1052,6 @@
 
                 liveChunkIntervalId = setInterval(sendChunk, chunkSec * 1000);
                 setupLiveVisualizer(liveStream, ctx);
-                document.getElementById('rec-status').textContent = '实时转写中';
                 transcriptEl.value = '';
                 segmentEl.textContent = '';
                 statusEl.textContent = '分段转写中：每 ' + chunkSec + ' 秒发送一段音频并追加转写结果。';
@@ -1077,7 +1071,6 @@
 
             liveRunning = false;
             stopLiveVisualizer();
-            document.getElementById('rec-status').textContent = '就绪';
             if (liveChunkIntervalId) {
                 clearInterval(liveChunkIntervalId);
                 liveChunkIntervalId = null;
@@ -1094,6 +1087,32 @@
                     statusEl.textContent = '收尾请求失败: ' + e.message;
                 }
                 liveSessionId = null;
+            } else {
+                // 分段转写：停止前把 30 秒之后到点击停止之间的剩余缓冲也发去转写
+                if (livePcmBuffer.length > 0 && liveAudioContext) {
+                    const chunks = livePcmBuffer.splice(0, livePcmBuffer.length);
+                    const wavBlob = encodePCMToWav(chunks, liveAudioContext.sampleRate);
+                    if (wavBlob && wavBlob.size >= 1000) {
+                        const language = document.getElementById('mic-language').value;
+                        statusEl.textContent = '正在转写最后一段…';
+                        try {
+                            const formData = new FormData();
+                            formData.append('audio', wavBlob, 'chunk.wav');
+                            formData.append('language', language);
+                            const response = await fetch(API_BASE + '/transcribe', { method: 'POST', body: formData });
+                            const result = await response.json();
+                            if (result.success && result.text != null) {
+                                const text = result.text.trim();
+                                if (text) {
+                                    const existing = transcriptEl.value;
+                                    transcriptEl.value = existing ? existing + text : text;
+                                }
+                            }
+                        } catch (err) {
+                            console.error('最后一段转写失败:', err);
+                        }
+                    }
+                }
             }
             if (liveScriptProcessor && liveAudioContext) {
                 try {
@@ -1118,6 +1137,37 @@
             document.getElementById('live-chunk-seconds').disabled = false;
             document.querySelectorAll('.mode-btn').forEach(b => { b.disabled = false; });
             statusEl.textContent = '已停止。可再次点击「开始实时转写」。';
+            startPreviewForDevice();
+        }
+
+        // 上传音频：当前选中的文件与播放用 Object URL（用于播放上传文件）
+        let uploadCurrentFile = null;
+        let uploadPlayUrl = null;
+
+        function playUploadedAudio() {
+            if (!uploadCurrentFile) return;
+            const audioEl = document.getElementById('upload-audio-player');
+            const container = document.getElementById('upload-audio-container');
+            if (!audioEl || !container) return;
+            audioEl.pause();
+            if (uploadPlayUrl) {
+                URL.revokeObjectURL(uploadPlayUrl);
+                uploadPlayUrl = null;
+            }
+            uploadPlayUrl = URL.createObjectURL(uploadCurrentFile);
+            audioEl.src = uploadPlayUrl;
+            audioEl.volume = 1;
+            audioEl.muted = false;
+            container.style.display = 'block';
+            audioEl.load();
+            const playWhenReady = () => {
+                audioEl.play().catch(err => console.error('[上传播放] 失败:', err));
+            };
+            if (audioEl.readyState >= 2) {
+                playWhenReady();
+            } else {
+                audioEl.addEventListener('canplay', playWhenReady, { once: true });
+            }
         }
 
         // 处理上传
@@ -1165,7 +1215,7 @@
         async function startRecording() {
             try {
                 // 若正在测试设备，先自动停止，避免测试的语音激励与录音同时存在
-                stopTestDeviceIfActive();
+                stopPreviewStream();
 
                 // 确保 audioContext 已创建，并在用户点击下恢复（浏览器策略：未 resume 时无声音、可视化无数据）
                 if (!audioContext) {
@@ -1273,18 +1323,15 @@
                     recBtn.classList.remove('btn-stop');
                     recBtn.disabled = false;
                     document.getElementById('mic-device').disabled = false;
-                    document.getElementById('test-device-btn').disabled = false;
                     document.querySelectorAll('.mode-btn').forEach(b => { b.disabled = false; });
-                    document.getElementById('rec-status').innerHTML = '就绪';
+                    startPreviewForDevice();
 
                     if (recordedAudioBlob.size === 0) {
                         document.getElementById('mic-status').textContent = '录音为空，请录久一点再点停止';
                         document.getElementById('play-btn').disabled = true;
-                        document.getElementById('download-btn').disabled = true;
                         return;
                     }
                     document.getElementById('play-btn').disabled = false;
-                    document.getElementById('download-btn').disabled = false;
                     await transcribeRecordedAudio();
                 };
 
@@ -1292,7 +1339,6 @@
                 mediaRecorder.start();
 
                 document.getElementById('play-btn').disabled = true;
-                document.getElementById('download-btn').disabled = true;
                 const audioPlayer = document.getElementById('audio-player');
                 if (audioPlayer && !audioPlayer.paused) {
                     audioPlayer.pause();
@@ -1308,16 +1354,14 @@
                 recBtn.textContent = '停止录音';
                 recBtn.classList.add('btn-stop');
                 document.getElementById('mic-device').disabled = true;
-                document.getElementById('test-device-btn').disabled = true;
                 document.querySelectorAll('.mode-btn').forEach(b => { b.disabled = true; });
-                document.getElementById('rec-status').innerHTML = '<span class="recording-indicator"></span>正在录音...';
             } catch (err) {
                 console.error('无法访问麦克风:', err);
                 document.getElementById('mic-status').textContent = '无法访问麦克风: ' + err.message;
                 document.getElementById('toggle-rec-btn').textContent = '开始录音';
                 document.getElementById('toggle-rec-btn').classList.remove('btn-stop');
                 document.querySelectorAll('.mode-btn').forEach(b => { b.disabled = false; });
-                document.getElementById('rec-status').textContent = '无法访问麦克风: ' + err.message;
+                console.error('无法访问麦克风:', err.message);
             }
         }
 
@@ -1473,18 +1517,6 @@
             } else {
                 audioPlayer.addEventListener('canplay', playWhenReady, { once: true });
             }
-        }
-
-        // 下载录音（固定文件名 recording.weba，避免浏览器生成 UUID.weba）
-        function downloadRecording() {
-            if (!recordedAudioBlob || recordedAudioBlob.size === 0) return;
-            const mime = recordedAudioBlob.type || 'audio/webm';
-            const ext = mime.indexOf('wav') !== -1 ? 'wav' : (mime.indexOf('webm') !== -1 ? 'weba' : (mime.indexOf('ogg') !== -1 ? 'ogg' : 'weba'));
-            const a = document.createElement('a');
-            a.href = URL.createObjectURL(recordedAudioBlob);
-            a.download = 'recording.' + ext;
-            a.click();
-            URL.revokeObjectURL(a.href);
         }
 
         // 转录录音
