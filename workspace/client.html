@@ -109,6 +109,9 @@
         .tab-content.active {
             display: block;
         }
+        .tab-content {
+            min-height: 520px;
+        }
         
         .row {
             display: flex;
@@ -213,6 +216,65 @@
             max-width: 100%;
         }
         
+        .transcribe-log-wrap {
+            margin-top: 8px;
+            min-height: 340px;
+            max-height: 340px;
+            overflow: auto;
+            border: 1px solid var(--neutral-300);
+            border-radius: 6px;
+        }
+        .transcribe-log-table {
+            width: 100%;
+            border-collapse: collapse;
+            font-size: 13px;
+        }
+        .transcribe-log-table thead {
+            position: sticky;
+            top: 0;
+            z-index: 1;
+            background: var(--neutral-100);
+            color: var(--neutral-800);
+            font-weight: 600;
+        }
+        .transcribe-log-table th,
+        .transcribe-log-table td {
+            padding: 6px 10px;
+            text-align: left;
+            border-bottom: 1px solid var(--neutral-200);
+        }
+        .transcribe-log-table th { border-bottom: 2px solid var(--neutral-400); }
+        .transcribe-log-table tbody tr:hover { background: var(--neutral-50); }
+
+        .transcribe-progress-wrap {
+            margin-top: 8px;
+            padding: 8px 0;
+        }
+        .transcribe-progress-bar {
+            height: 6px;
+            background: var(--neutral-200);
+            border-radius: 3px;
+            overflow: hidden;
+        }
+        .transcribe-progress-bar::after {
+            content: '';
+            display: block;
+            height: 100%;
+            width: 40%;
+            background: var(--primary-500);
+            border-radius: 3px;
+            animation: transcribe-progress-indeterminate 1.5s ease-in-out infinite;
+        }
+        @keyframes transcribe-progress-indeterminate {
+            0% { transform: translateX(-100%); }
+            100% { transform: translateX(350%); }
+        }
+        .transcribe-progress-text {
+            margin-top: 6px;
+            font-size: 13px;
+            color: var(--neutral-600);
+        }
+
         .recording-indicator {
             display: inline-block;
             width: 12px;
@@ -429,6 +491,16 @@
                     <label>转录结果</label>
                     <textarea id="upload-result" readonly placeholder="转录结果将显示在这里..."></textarea>
                     <div class="status-bar" id="upload-status">就绪</div>
+                    <div id="upload-progress-wrap" class="transcribe-progress-wrap" style="display: none;">
+                        <div class="transcribe-progress-bar"></div>
+                        <div class="transcribe-progress-text" id="upload-progress-text">转写中… 已等待 0:00</div>
+                    </div>
+                    <div class="transcribe-log-wrap">
+                        <table class="transcribe-log-table">
+                            <thead><tr><th>序号</th><th>音频文件名</th><th>音频时长</th><th>转写开始时间</th><th>耗时</th><th>转写结束时间</th></tr></thead>
+                            <tbody id="upload-transcribe-log"></tbody>
+                        </table>
+                    </div>
                 </div>
             </div>
         </div>
@@ -517,6 +589,16 @@
                     <label>转录结果</label>
                     <textarea id="mic-result" readonly placeholder="录音结束后或实时转写过程中，转录结果将显示在这里..."></textarea>
                     <div class="status-bar" id="mic-status">就绪</div>
+                    <div id="mic-progress-wrap" class="transcribe-progress-wrap" style="display: none;">
+                        <div class="transcribe-progress-bar"></div>
+                        <div class="transcribe-progress-text" id="mic-progress-text">转写中… 已等待 0:00</div>
+                    </div>
+                    <div class="transcribe-log-wrap">
+                        <table class="transcribe-log-table">
+                            <thead><tr><th>序号</th><th>音频文件名</th><th>音频时长</th><th>转写开始时间</th><th>耗时</th><th>转写结束时间</th></tr></thead>
+                            <tbody id="mic-transcribe-log"></tbody>
+                        </table>
+                    </div>
                 </div>
             </div>
         </div>
@@ -525,6 +607,87 @@
     <script>
         // API 地址：若你的服务映射到其它端口，改这里（与 WSL Docker -p 一致）
         const API_BASE = 'http://localhost:8000';
+
+        const MAX_TRANSCRIBE_LOG_ENTRIES = 10;
+        const transcribeLogs = { 'upload-transcribe-log': [], 'mic-transcribe-log': [] };
+
+        function formatDurationSec(sec) {
+            if (sec == null || sec === '') return '-';
+            const s = Math.round(Number(sec));
+            if (s < 60) return s + '秒';
+            const m = Math.floor(s / 60);
+            const r = s % 60;
+            return r ? m + '分' + r + '秒' : m + '分';
+        }
+        function formatDurationMs(ms) {
+            if (ms == null) return '-';
+            const totalSec = Math.round(Number(ms) / 1000);
+            if (totalSec < 60) return totalSec + '秒';
+            const m = Math.floor(totalSec / 60);
+            const r = totalSec % 60;
+            return r ? m + '分' + r + '秒' : m + '分';
+        }
+
+        function pushTranscribeLog(containerId, entry) {
+            const list = transcribeLogs[containerId];
+            if (!list) return;
+            const startTime = entry.startTime instanceof Date ? entry.startTime : new Date(entry.startTime);
+            const endTime = entry.endTime instanceof Date ? entry.endTime : new Date(entry.endTime);
+            list.unshift({ raw: { fileName: entry.fileName, fileDurationSec: entry.fileDurationSec, startTime, endTime, transcribeDurationMs: entry.transcribeDurationMs } });
+            while (list.length > MAX_TRANSCRIBE_LOG_ENTRIES) list.pop();
+            const tbody = document.getElementById(containerId);
+            if (!tbody) return;
+            const timeOpt = { hour12: false, hour: '2-digit', minute: '2-digit', second: '2-digit' };
+            tbody.innerHTML = list.map((item, index) => {
+                const r = item.raw;
+                const start = r.startTime instanceof Date ? r.startTime : new Date(r.startTime);
+                const end = r.endTime instanceof Date ? r.endTime : new Date(r.endTime);
+                const no = index + 1;
+                const name = escapeHtml(r.fileName || '-');
+                const dur = formatDurationSec(r.fileDurationSec);
+                const startStr = start.toLocaleTimeString('zh-CN', timeOpt);
+                const cost = formatDurationMs(r.transcribeDurationMs);
+                const endStr = end.toLocaleTimeString('zh-CN', timeOpt);
+                return '<tr><td>' + no + '</td><td>' + name + '</td><td>' + dur + '</td><td>' + startStr + '</td><td>' + cost + '</td><td>' + endStr + '</td></tr>';
+            }).join('');
+            tbody.closest('.transcribe-log-wrap').scrollTop = 0;
+        }
+        function escapeHtml(s) {
+            const div = document.createElement('div');
+            div.textContent = s;
+            return div.innerHTML;
+        }
+
+        /** 显示转写进度（无真实百分比时用 indeterminate 条 + 已等待时间 + 可选预计时间），返回 stop() */
+        function startTranscribeProgress(wrapId, textId, fileDurationSec) {
+            const wrap = document.getElementById(wrapId);
+            const textEl = document.getElementById(textId);
+            if (!wrap || !textEl) return () => {};
+            wrap.style.display = 'block';
+            const startMs = Date.now();
+            /* 预估转写耗时：实测多接近 1:1（甚至更长），按 1.2 倍音频时长估算，避免预估过短 */
+            const estimatedTotalMs = (fileDurationSec != null && fileDurationSec > 0)
+                ? Math.round(fileDurationSec * 1.2 * 1000)
+                : null;
+            const etaStr = estimatedTotalMs != null
+                ? '预计约 ' + Math.max(1, Math.ceil(estimatedTotalMs / 60000)) + ' 分钟'
+                : null;
+            function formatMMSS(sec) {
+                const m = Math.floor(sec / 60);
+                const s = sec % 60;
+                return m + ':' + (s < 10 ? '0' : '') + s;
+            }
+            function update() {
+                const elapsed = Math.floor((Date.now() - startMs) / 1000);
+                textEl.textContent = '转写中… 已等待 ' + formatMMSS(elapsed) + (etaStr ? ' | ' + etaStr : '');
+            }
+            update();
+            const tick = setInterval(update, 1000);
+            return function stop() {
+                clearInterval(tick);
+                wrap.style.display = 'none';
+            };
+        }
         // vLLM 流式实时转写（需 NVIDIA GPU）。留空则用 API_BASE 做分段 WAV 转写（适合无 GPU）
         const STREAMING_API_BASE = '';
 
@@ -725,6 +888,7 @@
             document.getElementById('audio-upload').addEventListener('change', function(e) {
                 const file = e.target.files[0] || null;
                 uploadCurrentFile = file;
+                uploadCurrentFileDuration = null;
                 if (uploadPlayUrl) {
                     URL.revokeObjectURL(uploadPlayUrl);
                     uploadPlayUrl = null;
@@ -739,6 +903,13 @@
                 if (container) container.style.display = 'none';
                 document.getElementById('file-name').textContent = file ? file.name : '未选择文件';
                 document.getElementById('upload-play-btn').disabled = !file;
+                if (file && file.type.startsWith('audio/')) {
+                    const url = URL.createObjectURL(file);
+                    const a = new Audio();
+                    a.onloadedmetadata = () => { uploadCurrentFileDuration = a.duration; URL.revokeObjectURL(url); };
+                    a.onerror = () => URL.revokeObjectURL(url);
+                    a.src = url;
+                }
             });
             
             document.getElementById('upload-btn').addEventListener('click', handleUpload);
@@ -871,6 +1042,8 @@
         let liveVisualizerAnimId = null;
         let liveAnalyser = null;
         let liveVisualizerSource = null;
+        let liveSegmentIndex = 0;
+        let liveStreamStartTime = null;
 
         function resampleLinear(input, srcSr, dstSr) {
             if (srcSr === dstSr) return input;
@@ -919,6 +1092,7 @@
                     if (!startRes.ok) throw new Error(await startRes.text());
                     const j = await startRes.json();
                     liveSessionId = j.session_id;
+                    liveStreamStartTime = Date.now();
                 } catch (e) {
                     statusEl.textContent = '流式服务连接失败（请确认 ' + STREAMING_API_BASE + ' 已启动）: ' + e.message;
                     return;
@@ -1007,6 +1181,7 @@
                     livePcmBuffer.push(new Float32Array(input));
                 };
 
+                liveSegmentIndex = 0;
                 const sendChunk = async () => {
                     if (!liveStream || !liveStream.active) return;
                     if (liveChunkSending) return;
@@ -1020,6 +1195,9 @@
                     }
 
                     liveChunkSending = true;
+                    const t0 = Date.now();
+                    const totalSamples = chunks.reduce((acc, c) => acc + c.length, 0);
+                    const chunkDurationSec = totalSamples / ctx.sampleRate;
                     segmentEl.textContent = '正在转写本段…';
                     try {
                         const formData = new FormData();
@@ -1027,6 +1205,15 @@
                         formData.append('language', language);
                         const response = await fetch(API_BASE + '/transcribe', { method: 'POST', body: formData });
                         const result = await response.json();
+                        const t1 = Date.now();
+                        liveSegmentIndex++;
+                        pushTranscribeLog('mic-transcribe-log', {
+                            fileName: '实时转写 第' + liveSegmentIndex + '段',
+                            fileDurationSec: chunkDurationSec,
+                            startTime: new Date(t0),
+                            transcribeDurationMs: t1 - t0,
+                            endTime: new Date(t1)
+                        });
                         if (result.success && result.text != null) {
                             const text = result.text.trim();
                             if (text) {
@@ -1076,17 +1263,28 @@
                 liveChunkIntervalId = null;
             }
             if (liveSessionId) {
+                const tEnd = Date.now();
                 try {
                     const r = await fetch(STREAMING_API_BASE + '/api/finish?session_id=' + encodeURIComponent(liveSessionId), { method: 'POST' });
                     if (r.ok) {
                         const j = await r.json();
                         transcriptEl.value = j.text || '';
                         statusEl.textContent = (j.language ? '语言: ' + j.language + ' | ' : '') + '已收尾';
+                        if (liveStreamStartTime != null) {
+                            pushTranscribeLog('mic-transcribe-log', {
+                                fileName: '实时转写(流式)',
+                                fileDurationSec: (tEnd - liveStreamStartTime) / 1000,
+                                startTime: new Date(liveStreamStartTime),
+                                transcribeDurationMs: 0,
+                                endTime: new Date(tEnd)
+                            });
+                        }
                     }
                 } catch (e) {
                     statusEl.textContent = '收尾请求失败: ' + e.message;
                 }
                 liveSessionId = null;
+                liveStreamStartTime = null;
             } else {
                 // 分段转写：停止前把 30 秒之后到点击停止之间的剩余缓冲也发去转写
                 if (livePcmBuffer.length > 0 && liveAudioContext) {
@@ -1094,6 +1292,9 @@
                     const wavBlob = encodePCMToWav(chunks, liveAudioContext.sampleRate);
                     if (wavBlob && wavBlob.size >= 1000) {
                         const language = document.getElementById('mic-language').value;
+                        const t0 = Date.now();
+                        const totalSamples = chunks.reduce((acc, c) => acc + c.length, 0);
+                        const chunkDurationSec = totalSamples / liveAudioContext.sampleRate;
                         statusEl.textContent = '正在转写最后一段…';
                         try {
                             const formData = new FormData();
@@ -1101,6 +1302,15 @@
                             formData.append('language', language);
                             const response = await fetch(API_BASE + '/transcribe', { method: 'POST', body: formData });
                             const result = await response.json();
+                            const t1 = Date.now();
+                            liveSegmentIndex++;
+                            pushTranscribeLog('mic-transcribe-log', {
+                                fileName: '实时转写 第' + liveSegmentIndex + '段(最后)',
+                                fileDurationSec: chunkDurationSec,
+                                startTime: new Date(t0),
+                                transcribeDurationMs: t1 - t0,
+                                endTime: new Date(t1)
+                            });
                             if (result.success && result.text != null) {
                                 const text = result.text.trim();
                                 if (text) {
@@ -1142,6 +1352,7 @@
 
         // 上传音频：当前选中的文件与播放用 Object URL（用于播放上传文件）
         let uploadCurrentFile = null;
+        let uploadCurrentFileDuration = null;
         let uploadPlayUrl = null;
 
         function playUploadedAudio() {
@@ -1182,25 +1393,38 @@
             }
             
             statusEl.textContent = '正在上传和转录...';
-            
+            const fileName = fileInput.files[0].name;
+            const t0 = Date.now();
+            const stopProgress = startTranscribeProgress('upload-progress-wrap', 'upload-progress-text', uploadCurrentFileDuration ?? undefined);
+
             const formData = new FormData();
-            formData.append('audio', fileInput.files[0], fileInput.files[0].name);
+            formData.append('audio', fileInput.files[0], fileName);
             formData.append('language', language);
-            
+
             try {
                 const response = await fetch(API_BASE + '/transcribe', {
                     method: 'POST',
                     body: formData
                 });
                 const result = await response.json();
+                const t1 = Date.now();
+                stopProgress();
 
                 if (result.success) {
                     document.getElementById('upload-result').value = result.text;
                     statusEl.textContent = `转录完成 (语言: ${result.language})`;
+                    pushTranscribeLog('upload-transcribe-log', {
+                        fileName: fileName,
+                        fileDurationSec: uploadCurrentFileDuration != null ? uploadCurrentFileDuration : null,
+                        startTime: new Date(t0),
+                        transcribeDurationMs: t1 - t0,
+                        endTime: new Date(t1)
+                    });
                 } else {
                     throw new Error(result.error || '未知错误');
                 }
             } catch (error) {
+                stopProgress();
                 console.error('转录失败:', error);
                 let msg = error.message;
                 if (msg === 'Failed to fetch') {
@@ -1527,9 +1751,14 @@
                 return;
             }
             statusEl.textContent = '正在转录...';
-
+            const t0 = Date.now();
             const mime = recordedAudioBlob.type || 'audio/webm';
             const ext = mime.indexOf('wav') !== -1 ? 'wav' : (mime.indexOf('webm') !== -1 ? 'webm' : (mime.indexOf('ogg') !== -1 ? 'ogg' : 'webm'));
+            let recordDurationSec = null;
+            if (mime.indexOf('wav') !== -1 && recordedAudioBlob.size > 44) {
+                recordDurationSec = (recordedAudioBlob.size - 44) / 2 / 16000;
+            }
+            const stopProgress = startTranscribeProgress('mic-progress-wrap', 'mic-progress-text', recordDurationSec ?? undefined);
             const formData = new FormData();
             formData.append('audio', recordedAudioBlob, 'recording.' + ext);
             formData.append('language', document.getElementById('mic-language').value);
@@ -1540,14 +1769,24 @@
                     body: formData
                 });
                 const result = await response.json();
+                const t1 = Date.now();
+                stopProgress();
 
                 if (result.success) {
                     document.getElementById('mic-result').value = result.text;
                     statusEl.textContent = `转录完成 (语言: ${result.language})`;
+                    pushTranscribeLog('mic-transcribe-log', {
+                        fileName: '录音转写',
+                        fileDurationSec: recordDurationSec,
+                        startTime: new Date(t0),
+                        transcribeDurationMs: t1 - t0,
+                        endTime: new Date(t1)
+                    });
                 } else {
                     throw new Error(result.error || '未知错误');
                 }
             } catch (error) {
+                stopProgress();
                 console.error('转录失败:', error);
                 let msg = error.message;
                 if (msg === 'Failed to fetch') {
