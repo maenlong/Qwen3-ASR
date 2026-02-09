@@ -1,6 +1,7 @@
 #include "mainwindow.h"
 #include "ui_mainwindow.h"
 #include "audiocollector.h"
+#include "sherpaonnx_helper.h"
 #include <algorithm>
 #include <cmath>
 #include <cstring>
@@ -29,6 +30,11 @@
 #include <QCoreApplication>
 #include <QUrl>
 #include <QDebug>
+#include <QtConcurrent>
+#include <QAudioDecoder>
+#include <QAudioBuffer>
+#include <QAudioFormat>
+#include <QEventLoop>
 
 // 与 client.html 一致的配色（Tailwind 风格）
 static const char* kStyleSheet = R"(
@@ -624,11 +630,14 @@ void MainWindow::onMicAudioData(const QByteArray &data)
 
 bool MainWindow::writeWavFile(const QString &path, const QByteArray &pcm)
 {
-    const int sampleRate = AudioCollector::sampleRate();
-    const int channels = AudioCollector::channelCount();
-    const int bitsPerSample = AudioCollector::sampleSize();
+    return writeWavFileWithFormat(path, pcm, AudioCollector::sampleRate(), AudioCollector::channelCount());
+}
+
+bool MainWindow::writeWavFileWithFormat(const QString &path, const QByteArray &pcm16, int sampleRate, int channels)
+{
+    const int bitsPerSample = 16;
     const int byteRate = sampleRate * channels * (bitsPerSample / 8);
-    const int dataSize = pcm.size();
+    const int dataSize = pcm16.size();
     const int fileSize = 36 + dataSize;
 
     QFile f(path);
@@ -640,7 +649,7 @@ bool MainWindow::writeWavFile(const QString &path, const QByteArray &pcm)
     ds << quint32(fileSize);
     ds.writeRawData("WAVE", 4);
     ds.writeRawData("fmt ", 4);
-    ds << quint32(16u);   // fmt chunk size
+    ds << quint32(16u);
     ds << quint16(1u);    // PCM
     ds << quint16(channels);
     ds << quint32(sampleRate);
@@ -649,9 +658,79 @@ bool MainWindow::writeWavFile(const QString &path, const QByteArray &pcm)
     ds << quint16(bitsPerSample);
     ds.writeRawData("data", 4);
     ds << quint32(dataSize);
-    f.write(pcm);
+    f.write(pcm16);
     f.close();
     return true;
+}
+
+QString MainWindow::decodeMediaToWav(const QString &sourcePath, QString *outError)
+{
+    QAudioDecoder decoder;
+    QAudioFormat format;
+    format.setSampleRate(16000);
+    format.setChannelCount(1);
+    format.setSampleSize(16);
+    format.setCodec(QStringLiteral("audio/pcm"));
+    format.setByteOrder(QAudioFormat::LittleEndian);
+    format.setSampleType(QAudioFormat::SignedInt);
+    decoder.setAudioFormat(format);
+    decoder.setSourceFilename(sourcePath);
+
+    QByteArray pcm16;
+    int outSampleRate = 16000;
+    int outChannels = 1;
+    QEventLoop loop;
+    QObject::connect(&decoder, &QAudioDecoder::bufferReady, [&decoder, &pcm16, &outSampleRate, &outChannels]() {
+        QAudioBuffer buf = decoder.read();
+        if (!buf.isValid() || buf.frameCount() == 0) return;
+        QAudioFormat fmt = buf.format();
+        outSampleRate = fmt.sampleRate();
+        outChannels = fmt.channelCount();
+        const int frames = buf.frameCount();
+        if (fmt.sampleType() == QAudioFormat::Float && fmt.sampleSize() == 32) {
+            const float *src = reinterpret_cast<const float *>(buf.constData());
+            for (int i = 0; i < frames * outChannels; i += outChannels) {
+                float s = outChannels == 1 ? src[i] : (src[i] + (outChannels > 1 ? src[i + 1] : 0)) / 2.0f;
+                qint16 v = static_cast<qint16>(qBound(-32768.0f, s * 32768.0f, 32767.0f));
+                pcm16.append(reinterpret_cast<const char *>(&v), 2);
+            }
+            outChannels = 1;
+        } else if (fmt.sampleType() == QAudioFormat::SignedInt && fmt.sampleSize() == 16) {
+            const char *src = reinterpret_cast<const char *>(buf.constData());
+            const int step = outChannels * 2;
+            for (int i = 0; i < frames * step; i += step)
+                pcm16.append(src + i, 2);
+            outChannels = 1;  // 只取第一声道
+        } else {
+            pcm16.append(reinterpret_cast<const char *>(buf.constData()), buf.byteCount());
+        }
+    });
+    QObject::connect(&decoder, &QAudioDecoder::finished, &loop, &QEventLoop::quit);
+    QObject::connect(&decoder, QOverload<QAudioDecoder::Error>::of(&QAudioDecoder::error), [outError, &loop](QAudioDecoder::Error e) {
+        if (outError && e != QAudioDecoder::NoError)
+            *outError = QString::fromUtf8("解码失败，请确认系统支持该格式（如 MP3 需媒体基础库）");
+        loop.quit();
+    });
+
+    decoder.start();
+    if (decoder.state() != QAudioDecoder::DecodingState) {
+        if (outError) *outError = QString::fromUtf8("无法启动解码（可能不支持该格式）");
+        return QString();
+    }
+    loop.exec();
+
+    if (pcm16.isEmpty()) {
+        if (outError && outError->isEmpty()) *outError = QString::fromUtf8("解码后无数据");
+        return QString();
+    }
+
+    QString tempPath = QDir::tempPath() + QStringLiteral("/qt_asr_decode_%1.wav")
+        .arg(QDateTime::currentDateTime().toString(QStringLiteral("yyyyMMdd_HHmmss_zzz")));
+    if (!writeWavFileWithFormat(tempPath, pcm16, outSampleRate, outChannels)) {
+        if (outError) *outError = QString::fromUtf8("写入临时 WAV 失败");
+        return QString();
+    }
+    return tempPath;
 }
 
 void MainWindow::onMicRecordClicked()
@@ -899,8 +978,12 @@ void MainWindow::loadAsrConfig()
     ini.endGroup();
 
     ini.beginGroup(QStringLiteral("sherpa_onnx"));
-    if (ini.contains(QStringLiteral("model_dir")))
+    if (ini.contains(QStringLiteral("model_dir"))) {
         m_sherpaOnnxModelDir = ini.value(QStringLiteral("model_dir")).toString().trimmed();
+        // 相对路径按 exe 所在目录解析，便于配置 ../models 或 ./models
+        if (!m_sherpaOnnxModelDir.isEmpty() && !QDir::isAbsolutePath(m_sherpaOnnxModelDir))
+            m_sherpaOnnxModelDir = QDir(QCoreApplication::applicationDirPath()).absoluteFilePath(m_sherpaOnnxModelDir);
+    }
     ini.endGroup();
 
     ini.beginGroup(QStringLiteral("vosk"));
@@ -1009,13 +1092,67 @@ void MainWindow::appendMicLogRow(const QString &fileName, double durationSec,
 
 void MainWindow::onTranscribeUploadClicked()
 {
-    qDebug() << "[UI] Button: Transcribe upload, file=" << m_uploadFilePath;
-    if (!isQwenServerBackend()) {
-        ui->labelUploadStatus->setText(tr("当前引擎为 %1，上传转写仅支持 Qwen 服务端。请在 config.ini 中设置 [asr] backend=qwen_server").arg(asrBackendDisplayName()));
-        return;
-    }
+    qDebug() << "[UI] Button: Transcribe upload, file=" << m_uploadFilePath << "backend=" << (m_asrBackend == AsrBackendSherpaONNX ? "sherpa_onnx" : "qwen_server");
     if (m_uploadFilePath.isEmpty()) {
         ui->labelUploadStatus->setText(tr("请先选择音频文件"));
+        return;
+    }
+
+#ifdef HAVE_SHERPA_ONNX
+    if (m_asrBackend == AsrBackendSherpaONNX) {
+        if (m_sherpaOnnxModelDir.isEmpty()) {
+            ui->labelUploadStatus->setText(tr("请先在 config.ini 的 [sherpa_onnx] 中配置 model_dir"));
+            return;
+        }
+        ui->btnTranscribeUpload->setEnabled(false);
+        ui->uploadProgressWrap->setVisible(true);
+        ui->labelUploadStatus->setText(tr("转写中…（Sherpa-ONNX 本地）"));
+        m_transcribeStartTime = QDateTime::currentDateTime();
+        m_transcribeFileName = QFileInfo(m_uploadFilePath).fileName();
+        m_transcribeDurationSec = 0;
+        if (m_uploadFileDurationMs > 0)
+            m_transcribeDurationSec = m_uploadFileDurationMs / 1000.0;
+        else if (m_uploadPlayer->duration() > 0)
+            m_transcribeDurationSec = m_uploadPlayer->duration() / 1000.0;
+        QString estStr;
+        if (m_transcribeDurationSec > 0) {
+            const int estSec = qMax(1, static_cast<int>(m_transcribeDurationSec * 1.2));
+            estStr = (estSec >= 60)
+                ? tr("预计约 %1 分钟").arg(qMax(1, (estSec + 59) / 60))
+                : tr("预估约 %1 秒").arg(estSec);
+        }
+        ui->labelUploadProgressText->setText(estStr.isEmpty()
+            ? tr("转写中… 已等待 0:00")
+            : tr("转写中… 已等待 0:00 | %1").arg(estStr));
+        m_sherpaTranscribeForUpload = true;
+        m_sherpaTempWavPath.clear();
+        QString pathToTranscribe = m_uploadFilePath;
+        bool isWav = m_uploadFilePath.endsWith(QStringLiteral(".wav"), Qt::CaseInsensitive);
+        if (!isWav) {
+            ui->labelUploadStatus->setText(tr("正在解码为 WAV…"));
+            qApp->processEvents();
+            QString decodeErr;
+            m_sherpaTempWavPath = decodeMediaToWav(m_uploadFilePath, &decodeErr);
+            if (m_sherpaTempWavPath.isEmpty()) {
+                ui->labelUploadStatus->setText(decodeErr.isEmpty() ? tr("解码失败") : decodeErr);
+                ui->btnTranscribeUpload->setEnabled(true);
+                ui->uploadProgressWrap->setVisible(false);
+                return;
+            }
+            pathToTranscribe = m_sherpaTempWavPath;
+            ui->labelUploadStatus->setText(tr("转写中…（Sherpa-ONNX 本地）"));
+        }
+        if (m_sherpaTranscribeWatcher) m_sherpaTranscribeWatcher->deleteLater();
+        m_sherpaTranscribeWatcher = new QFutureWatcher<QPair<QString, QString>>(this);
+        connect(m_sherpaTranscribeWatcher, &QFutureWatcher<QPair<QString, QString>>::finished, this, &MainWindow::onSherpaTranscribeFinished);
+        m_sherpaTranscribeWatcher->setFuture(QtConcurrent::run(transcribeWavWithSherpaOnnx, pathToTranscribe, m_sherpaOnnxModelDir));
+        m_transcribeProgressTimer->start(1000);
+        return;
+    }
+#endif
+
+    if (!isQwenServerBackend()) {
+        ui->labelUploadStatus->setText(tr("当前引擎为 %1，上传转写仅支持 Qwen 服务端或 Sherpa-ONNX。请在 config.ini 中设置 backend。").arg(asrBackendDisplayName()));
         return;
     }
     ui->btnTranscribeUpload->setEnabled(false);
@@ -1029,7 +1166,6 @@ void MainWindow::onTranscribeUploadClicked()
         m_transcribeDurationSec = m_uploadFileDurationMs / 1000.0;
     else if (m_uploadPlayer->duration() > 0)
         m_transcribeDurationSec = m_uploadPlayer->duration() / 1000.0;
-    // 与网页端一致：有 duration 时按 1.2 倍估算并显示 " | 预计约 X 分钟"，无 duration 则不显示预估
     QString estStr;
     if (m_transcribeDurationSec > 0) {
         const int estSec = qMax(1, static_cast<int>(m_transcribeDurationSec * 1.2));
@@ -1071,7 +1207,11 @@ void MainWindow::onTranscribeProgressTick()
         : tr("转写中… 已等待 %1 | %2").arg(elapsedStr).arg(estStr);
     if (m_uploadTranscribeReply)
         ui->labelUploadProgressText->setText(msg);
+    else if (m_sherpaTranscribeWatcher && m_sherpaTranscribeForUpload)
+        ui->labelUploadProgressText->setText(msg);
     else if (m_micTranscribeReply)
+        ui->labelMicProgressText->setText(msg);
+    else if (m_sherpaTranscribeWatcher && !m_sherpaTranscribeForUpload)
         ui->labelMicProgressText->setText(msg);
 }
 
@@ -1127,12 +1267,44 @@ void MainWindow::onUploadTranscribeFinished()
 
 void MainWindow::startMicTranscribe()
 {
-    qDebug() << "[UI] Start mic transcribe (record mode), path=" << m_micRecordPath;
-    if (!isQwenServerBackend()) {
-        ui->labelMicStatus->setText(tr("当前引擎为 %1，录音转写仅支持 Qwen 服务端。请在 config.ini 中设置 [asr] backend=qwen_server").arg(asrBackendDisplayName()));
+    qDebug() << "[UI] Start mic transcribe (record mode), path=" << m_micRecordPath << "backend=" << (m_asrBackend == AsrBackendSherpaONNX ? "sherpa_onnx" : "qwen_server");
+    if (m_micRecordPath.isEmpty()) return;
+
+#ifdef HAVE_SHERPA_ONNX
+    if (m_asrBackend == AsrBackendSherpaONNX) {
+        if (m_sherpaOnnxModelDir.isEmpty()) {
+            ui->labelMicStatus->setText(tr("请先在 config.ini 的 [sherpa_onnx] 中配置 model_dir"));
+            return;
+        }
+        ui->micProgressWrap->setVisible(true);
+        m_transcribeStartTime = QDateTime::currentDateTime();
+        m_transcribeFileName = tr("录音转写");
+        QFileInfo fi(m_micRecordPath);
+        m_transcribeDurationSec = (fi.size() > 44) ? ((fi.size() - 44) / 2.0 / 16000.0) : 0;
+        QString micEstStr;
+        if (m_transcribeDurationSec > 0) {
+            const int estSec = qMax(1, static_cast<int>(m_transcribeDurationSec * 1.2));
+            micEstStr = (estSec >= 60)
+                ? tr("预计约 %1 分钟").arg(qMax(1, (estSec + 59) / 60))
+                : tr("预估约 %1 秒").arg(estSec);
+        }
+        ui->labelMicProgressText->setText(micEstStr.isEmpty()
+            ? tr("转写中… 已等待 0:00（Sherpa-ONNX 本地）")
+            : tr("转写中… 已等待 0:00 | %1（Sherpa-ONNX 本地）").arg(micEstStr));
+        m_sherpaTranscribeForUpload = false;
+        if (m_sherpaTranscribeWatcher) m_sherpaTranscribeWatcher->deleteLater();
+        m_sherpaTranscribeWatcher = new QFutureWatcher<QPair<QString, QString>>(this);
+        connect(m_sherpaTranscribeWatcher, &QFutureWatcher<QPair<QString, QString>>::finished, this, &MainWindow::onSherpaTranscribeFinished);
+        m_sherpaTranscribeWatcher->setFuture(QtConcurrent::run(transcribeWavWithSherpaOnnx, m_micRecordPath, m_sherpaOnnxModelDir));
+        m_transcribeProgressTimer->start(1000);
         return;
     }
-    if (m_micRecordPath.isEmpty()) return;
+#endif
+
+    if (!isQwenServerBackend()) {
+        ui->labelMicStatus->setText(tr("当前引擎为 %1，录音转写仅支持 Qwen 服务端或 Sherpa-ONNX。请在 config.ini 中设置 backend。").arg(asrBackendDisplayName()));
+        return;
+    }
     ui->micProgressWrap->setVisible(true);
     m_transcribeStartTime = QDateTime::currentDateTime();
     m_transcribeFileName = tr("录音转写");
@@ -1158,6 +1330,45 @@ void MainWindow::startMicTranscribe()
     }
     connect(m_micTranscribeReply, &QNetworkReply::finished, this, &MainWindow::onMicTranscribeFinished);
     m_transcribeProgressTimer->start(1000);
+}
+
+void MainWindow::onSherpaTranscribeFinished()
+{
+    m_transcribeProgressTimer->stop();
+    if (!m_sherpaTranscribeWatcher) return;
+    QPair<QString, QString> result = m_sherpaTranscribeWatcher->result();
+    const bool forUpload = m_sherpaTranscribeForUpload;
+    const qint64 durationMs = m_transcribeStartTime.msecsTo(QDateTime::currentDateTime());
+    m_sherpaTranscribeWatcher->deleteLater();
+    m_sherpaTranscribeWatcher = nullptr;
+
+    if (!m_sherpaTempWavPath.isEmpty()) {
+        QFile::remove(m_sherpaTempWavPath);
+        m_sherpaTempWavPath.clear();
+    }
+
+    if (forUpload) {
+        ui->uploadProgressWrap->setVisible(false);
+        ui->btnTranscribeUpload->setEnabled(true);
+        if (!result.second.isEmpty()) {
+            ui->textUploadResult->setPlainText(tr("转录失败: %1").arg(result.second));
+            ui->labelUploadStatus->setText(tr("转录失败: %1").arg(result.second));
+        } else {
+            ui->textUploadResult->setPlainText(result.first);
+            ui->labelUploadStatus->setText(tr("转录完成（Sherpa-ONNX 本地）"));
+            appendUploadLogRow(m_transcribeFileName, m_transcribeDurationSec, m_transcribeStartTime, durationMs);
+        }
+    } else {
+        ui->micProgressWrap->setVisible(false);
+        if (!result.second.isEmpty()) {
+            ui->textMicResult->setPlainText(tr("转录失败: %1").arg(result.second));
+            ui->labelMicStatus->setText(tr("转录失败: %1").arg(result.second));
+        } else {
+            ui->textMicResult->setPlainText(result.first);
+            ui->labelMicStatus->setText(tr("转录完成（Sherpa-ONNX 本地）"));
+            appendMicLogRow(m_transcribeFileName, m_transcribeDurationSec, m_transcribeStartTime, durationMs);
+        }
+    }
 }
 
 void MainWindow::onMicTranscribeFinished()

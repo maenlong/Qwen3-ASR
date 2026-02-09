@@ -7,7 +7,9 @@
 #include <QByteArray>
 #include <QComboBox>
 #include <QDateTime>
+#include <QPair>
 #include <QString>
+#include <QFutureWatcher>
 
 class QAudioInput;
 class QIODevice;
@@ -56,6 +58,7 @@ private slots:
     void onUploadTranscribeFinished();
     void onMicTranscribeFinished();
     void onTranscribeProgressTick();
+    void onSherpaTranscribeFinished();
 
 public:
     enum AsrBackend { AsrBackendQwenServer, AsrBackendSherpaONNX, AsrBackendVosk };
@@ -75,6 +78,8 @@ private:
     void updateMicTimeLabel();
     static QString formatMs(qint64 ms);
     bool writeWavFile(const QString &path, const QByteArray &pcm);
+    bool writeWavFileWithFormat(const QString &path, const QByteArray &pcm16, int sampleRate, int channels);
+    QString decodeMediaToWav(const QString &sourcePath, QString *outError);
 
     void startPreview();  // 语音激励：用当前选中设备推电平
     void stopPreview();
@@ -123,6 +128,10 @@ private:
     QDateTime m_transcribeStartTime;
     QString m_transcribeFileName;
     double m_transcribeDurationSec = 0;
+
+    QFutureWatcher<QPair<QString, QString>> *m_sherpaTranscribeWatcher = nullptr;
+    bool m_sherpaTranscribeForUpload = false;  // true=上传转写, false=录音转写
+    QString m_sherpaTempWavPath;  // 非 WAV 上传时解码得到的临时 WAV，用后删除
 };
 
 #endif // MAINWINDOW_H

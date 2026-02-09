@@ -13,8 +13,9 @@ backend=qwen_server
 api_base_url=http://localhost:8000
 
 [sherpa_onnx]
-; 仅当 backend=sherpa_onnx 时生效，后续版本使用
-model_dir=./sherpa_onnx_models
+; 仅当 backend=sherpa_onnx 时生效；相对路径相对于 exe 所在目录
+; 若在项目下建 models 目录并放入 encoder/decoder/joiner.onnx、tokens.txt，exe 在 build_release 时可填 ../models
+model_dir=../models
 
 [vosk]
 ; 仅当 backend=vosk 时生效，后续版本使用

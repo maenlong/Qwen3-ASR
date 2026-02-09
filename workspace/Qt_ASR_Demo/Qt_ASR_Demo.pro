@@ -1,4 +1,4 @@
-QT       += core gui network multimedia
+QT       += core gui network multimedia concurrent
 
 greaterThan(QT_MAJOR_VERSION, 4): QT += widgets
 
@@ -15,7 +15,8 @@ SOURCES += \
 
 HEADERS += \
     src/audiocollector.h \
-    src/mainwindow.h
+    src/mainwindow.h \
+    src/sherpaonnx_helper.h
 
 FORMS += \
     src/mainwindow.ui
@@ -52,5 +53,7 @@ win32 {
         message(COPY_FILE $$sherpaBinDir->$$dstDir)
         QMAKE_POST_LINK  +=  &&  xcopy $$sherpaLibDll $$dstDir /e /r /q /y
         message(COPY_FILE $$sherpaLibDll->$$dstDir)
+
+        SOURCES += src/sherpaonnx_helper.cpp
     }
 }
