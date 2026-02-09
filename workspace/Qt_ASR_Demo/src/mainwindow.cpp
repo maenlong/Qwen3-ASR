@@ -36,7 +36,7 @@
 #include <QAudioFormat>
 #include <QEventLoop>
 
-// 与 client.html 一致的配色（Tailwind 风格）
+// Match client.html colors (Tailwind style)
 static const char* kStyleSheet = R"(
 /* 主窗口背景 */
 QMainWindow, #centralwidget { background-color: #f1f5f9; }
@@ -228,15 +228,15 @@ MainWindow::MainWindow(QWidget *parent)
 
     setStyleSheet(kStyleSheet);
 
-    // 标题栏文字水平居中（.ui 中 item 的 alignment 会导致解析错误，故在代码中设置）
+    // Center header text (alignment in .ui can cause parse errors, set in code)
     ui->verticalLayout_header->setAlignment(ui->labelTitle, Qt::AlignHCenter);
     ui->verticalLayout_header->setAlignment(ui->labelSubtitle, Qt::AlignHCenter);
 
-    // 与网页一致的布局间距
+    // Match web layout spacing
     ui->verticalLayout_main->setSpacing(0);
     ui->verticalLayout_main->setContentsMargins(12, 12, 12, 12);
 
-    // 上传/麦克风 Tab 内容区边距
+    // Upload/Mic tab content padding
     ui->horizontalLayout_upload->setSpacing(20);
     ui->horizontalLayout_upload->setContentsMargins(0, 0, 0, 0);
     ui->horizontalLayout_mic->setSpacing(20);
@@ -252,16 +252,16 @@ MainWindow::MainWindow(QWidget *parent)
     ui->verticalLayout_micRight->setSpacing(8);
     ui->verticalLayout_micRight->setContentsMargins(0, 0, 0, 0);
 
-    // 两页左右栏统一：左侧固定 360px，右侧占满剩余空间，切换 Tab 不跳动
+    // Both tabs: left 360px, right fills rest; no jump on tab switch
     ui->horizontalLayout_upload->setStretch(0, 0);
     ui->horizontalLayout_upload->setStretch(1, 1);
     ui->horizontalLayout_mic->setStretch(0, 0);
     ui->horizontalLayout_mic->setStretch(1, 1);
 
-    // 转写日志表头（与 client.html 一致），并确保表头可见
+    // Transcribe log table header (match client.html), ensure visible
     const QStringList headers { tr("序号"), tr("音频文件名"), tr("音频时长"),
                                tr("转写开始时间"), tr("耗时"), tr("转写结束时间") };
-    // 两个日志表一致：显示顶部列名（序号、音频文件名…），隐藏左侧行号列（第一列已是序号）
+    // Both log tables: show column headers (no, file name...), hide row number column
     ui->tableUploadLog->setHorizontalHeaderLabels(headers);
     ui->tableUploadLog->verticalHeader()->setVisible(false);
     ui->tableUploadLog->horizontalHeader()->setVisible(true);
@@ -271,7 +271,7 @@ MainWindow::MainWindow(QWidget *parent)
     ui->tableMicLog->horizontalHeader()->setVisible(true);
     ui->tableMicLog->horizontalHeader()->setSectionResizeMode(QHeaderView::Stretch);
 
-    // Tab 按钮互斥并切换 stackedWidget 页面（两按钮等分宽度，与网页一致）
+    // Tab buttons exclusive, switch stackedWidget; equal width like web
     ui->horizontalLayout_tabBar->setStretch(0, 1);
     ui->horizontalLayout_tabBar->setStretch(1, 1);
     QButtonGroup *tabGroup = new QButtonGroup(this);
@@ -283,7 +283,7 @@ MainWindow::MainWindow(QWidget *parent)
     });
     ui->stackedWidget->setCurrentIndex(0);
 
-    // 上传：选择文件、播放、播放器内暂停/进度
+    // Upload: select file, play, in-player pause/progress
     connect(ui->btnSelectFile, &QPushButton::clicked, this, &MainWindow::onSelectFile);
     connect(ui->btnPlayFile, &QPushButton::clicked, this, &MainWindow::onPlayUploadFile);
     connect(ui->btnUploadPlayPause, &QPushButton::clicked, this, &MainWindow::onUploadPlayPauseClicked);
@@ -295,7 +295,7 @@ MainWindow::MainWindow(QWidget *parent)
     connect(ui->sliderUploadPosition, &QSlider::sliderReleased, this, [this]() { m_uploadSliderPressed = false; });
     connect(ui->sliderUploadPosition, &QSlider::sliderMoved, this, &MainWindow::onUploadSliderMoved);
 
-    // 麦克风：播放录音、播放器内暂停/进度（录音未实现前仅显示容器）
+    // Mic: play recording, in-player pause/progress
     connect(ui->btnMicPlay, &QPushButton::clicked, this, &MainWindow::onMicPlayClicked);
     connect(ui->btnMicPlayPause, &QPushButton::clicked, this, &MainWindow::onMicPlayPauseClicked);
     m_micPlayer = new QMediaPlayer(this);
@@ -306,7 +306,7 @@ MainWindow::MainWindow(QWidget *parent)
     connect(ui->sliderMicPosition, &QSlider::sliderReleased, this, [this]() { m_micSliderPressed = false; });
     connect(ui->sliderMicPosition, &QSlider::sliderMoved, this, &MainWindow::onMicSliderMoved);
 
-    // 所有下拉框统一使用自定义 QListView，使弹出项高度与 combobox 一致
+    // All combos use custom QListView so popup item height matches
     auto setComboView = [this](QComboBox *combo) {
         QListView *v = new QListView(this);
         v->setUniformItemSizes(true);
@@ -317,16 +317,16 @@ MainWindow::MainWindow(QWidget *parent)
     setComboView(ui->comboMicLanguage);
     setComboView(ui->comboMicMode);
     setComboView(ui->comboLiveChunkSeconds);
-    ui->comboLiveChunkSeconds->setCurrentIndex(1);  // 默认每 10 秒
+    ui->comboLiveChunkSeconds->setCurrentIndex(1);  // default 10s
 
-    // 麦克风设备列表与选择变化；切换设备后自动开语音激励预览
+    // Mic device list and selection; auto start level preview on device change
     refreshMicDevices();
     connect(ui->comboMicDevice, QOverload<int>::of(&QComboBox::currentIndexChanged), this, &MainWindow::onMicDeviceChanged);
     connect(ui->comboMicMode, QOverload<int>::of(&QComboBox::currentIndexChanged), this, &MainWindow::onMicModeChanged);
-    onMicModeChanged(ui->comboMicMode->currentIndex());  // 初始按钮文案与转写间隔显隐
+    onMicModeChanged(ui->comboMicMode->currentIndex());  // initial button text and interval visibility
     startPreview();
 
-    // 录音/实时：采集器与开始/停止
+    // Record/live: collector and start/stop
     m_audioCollector = new AudioCollector(this);
     connect(m_audioCollector, &AudioCollector::audioDataCaptured, this, &MainWindow::onMicAudioData);
     connect(ui->btnMicRecord, &QPushButton::clicked, this, &MainWindow::onMicRecordClicked);
@@ -347,6 +347,12 @@ MainWindow::MainWindow(QWidget *parent)
 MainWindow::~MainWindow()
 {
     stopPreview();
+#ifdef HAVE_SHERPA_ONNX
+    if (m_sherpaPunctuation) {
+        destroySherpaOfflinePunctuation(m_sherpaPunctuation);
+        m_sherpaPunctuation = nullptr;
+    }
+#endif
     delete ui;
 }
 
@@ -354,6 +360,24 @@ QString MainWindow::formatMs(qint64 ms)
 {
     const qint64 s = ms / 1000;
     return QString("%1:%2").arg(s / 60).arg(s % 60, 2, 10, QChar('0'));
+}
+
+QString MainWindow::applySherpaPunctuation(const QString &text)
+{
+#ifdef HAVE_SHERPA_ONNX
+    if (text.isEmpty() || m_sherpaOnnxPunctModel.isEmpty()) return text;
+    if (!m_sherpaPunctuation) {
+        QString err;
+        m_sherpaPunctuation = createSherpaOfflinePunctuation(m_sherpaOnnxPunctModel, &err);
+        if (!m_sherpaPunctuation) {
+            qDebug() << "[Sherpa] punctuation model load failed, output without punct. error:" << err;
+            return text;
+        }
+    }
+    return addPunctuationToText(m_sherpaPunctuation, text);
+#else
+    return text;
+#endif
 }
 
 void MainWindow::onSelectFile()
@@ -373,7 +397,7 @@ void MainWindow::onSelectFile()
     ui->uploadPlayerContainer->setVisible(false);
     if (m_uploadPlayer->state() != QMediaPlayer::StoppedState)
         m_uploadPlayer->stop();
-    // 预加载媒体以获取时长（与网页端一致），便于转写时显示预估时间
+    // Preload media for duration (match web), for transcribe progress estimate
     m_uploadPlayer->setMedia(QMediaContent(QUrl::fromLocalFile(m_uploadFilePath)));
 }
 
@@ -526,7 +550,7 @@ void MainWindow::onMicModeChanged(int index)
     ui->comboLiveChunkSeconds->setEnabled(!m_isLiveRunning);
     if (isLive) {
         ui->btnMicRecord->setText(m_isLiveRunning ? tr("停止实时转写") : tr("开始实时转写"));
-        ui->btnMicPlay->setVisible(false);  // 实时模式不显示播放录音
+        ui->btnMicPlay->setVisible(false);  // live mode: hide play recording
     } else {
         ui->btnMicRecord->setText(m_isRecording ? tr("停止录音") : tr("开始录音"));
         ui->btnMicPlay->setVisible(true);
@@ -595,7 +619,7 @@ void MainWindow::onPreviewReadyRead()
     level = std::min(100, level);
     m_previewPeak = std::max(m_previewPeak, level);
     ui->progressMicLevel->setValue(m_previewPeak);
-    // 峰值缓慢回落
+    // Peak decay
     QTimer::singleShot(80, this, [this]() {
         m_previewPeak = std::max(0, m_previewPeak - 3);
         if (m_previewInput)
@@ -606,7 +630,7 @@ void MainWindow::onPreviewReadyRead()
 void MainWindow::onMicAudioData(const QByteArray &data)
 {
     m_recordedPcm.append(data);
-    // 录音或实时转写时用同一路数据驱动语音激励条
+    // Same data drives level bar for record or live transcribe
     const bool drivingLevel = m_isRecording || m_isLiveRunning;
     if (!drivingLevel || data.size() < 2) return;
     int maxAbs = 0;
@@ -700,7 +724,7 @@ QString MainWindow::decodeMediaToWav(const QString &sourcePath, QString *outErro
             const int step = outChannels * 2;
             for (int i = 0; i < frames * step; i += step)
                 pcm16.append(src + i, 2);
-            outChannels = 1;  // 只取第一声道
+            outChannels = 1;  // first channel only
         } else {
             pcm16.append(reinterpret_cast<const char *>(buf.constData()), buf.byteCount());
         }
@@ -811,8 +835,41 @@ int MainWindow::liveChunkIntervalSec() const
 
 void MainWindow::onMicStartLiveTranscribe()
 {
+#ifdef HAVE_SHERPA_ONNX
+    if (m_asrBackend == AsrBackendSherpaONNX) {
+        if (m_sherpaOnnxModelDir.isEmpty()) {
+            ui->labelMicStatus->setText(tr("请先在 config.ini 的 [sherpa_onnx] 中配置 model_dir"));
+            return;
+        }
+        qDebug() << "[UI] Start live transcribe (Sherpa-ONNX streaming), device=" << m_selectedMicDeviceName;
+        if (m_selectedMicDeviceName.isEmpty()) {
+            ui->labelMicStatus->setText(tr("请先选择麦克风设备"));
+            return;
+        }
+        stopPreview();
+        m_audioCollector->selectDevice(m_selectedMicDeviceName);
+        m_recordedPcm.clear();
+        m_audioCollector->startCapture();
+        m_isLiveRunning = true;
+        ui->btnMicRecord->setText(tr("停止实时转写"));
+        ui->btnMicRecord->setChecked(true);
+        ui->comboLiveChunkSeconds->setEnabled(false);
+        ui->labelMicStatus->setText(tr("正在加载 Sherpa-ONNX 模型…"));
+        ui->textMicResult->clear();
+        QString modelDir = m_sherpaOnnxModelDir;
+        if (m_sherpaLiveSessionWatcher) m_sherpaLiveSessionWatcher->deleteLater();
+        m_sherpaLiveSessionWatcher = new QFutureWatcher<QPair<void *, QString>>(this);
+        connect(m_sherpaLiveSessionWatcher, &QFutureWatcher<QPair<void *, QString>>::finished, this, &MainWindow::onSherpaLiveSessionReady);
+        m_sherpaLiveSessionWatcher->setFuture(QtConcurrent::run([modelDir]() {
+            QString err;
+            SherpaLiveSession *s = createSherpaLiveSession(modelDir, &err);
+            return qMakePair(static_cast<void *>(s), err);
+        }));
+        return;
+    }
+#endif
     if (!isQwenServerBackend()) {
-        ui->labelMicStatus->setText(tr("当前引擎为 %1，实时分段转写仅支持 Qwen 服务端。Sherpa-ONNX/Vosk 的实时模式请等待后续版本。请在 config.ini 中设置 [asr] backend=qwen_server").arg(asrBackendDisplayName()));
+        ui->labelMicStatus->setText(tr("当前引擎为 %1，实时分段转写仅支持 Qwen 服务端或 Sherpa-ONNX。").arg(asrBackendDisplayName()));
         return;
     }
     const int intervalSec = liveChunkIntervalSec();
@@ -844,6 +901,10 @@ void MainWindow::sendLiveChunk()
     QByteArray chunk = m_recordedPcm;
     m_recordedPcm.clear();
     const double durationSec = chunk.size() / (16000.0 * 2.0);
+    m_liveChunkStartTime = QDateTime::currentDateTime();
+    m_liveChunkDurationSec = durationSec;
+    m_liveSegmentIndex++;
+
     qDebug() << "[API] Live chunk: sending segment, duration_sec=" << durationSec << "bytes=" << chunk.size();
     QString path = QDir::tempPath() + QString("/qt_asr_live_%1.wav")
         .arg(QDateTime::currentDateTime().toString("yyyyMMdd_HHmmss"));
@@ -851,9 +912,6 @@ void MainWindow::sendLiveChunk()
 
     m_liveChunkSending = true;
     m_liveChunkTempPath = path;
-    m_liveChunkStartTime = QDateTime::currentDateTime();
-    m_liveChunkDurationSec = durationSec;
-    m_liveSegmentIndex++;
     QString lang = transcribeLanguageFromCombo(ui->comboMicLanguage);
     m_liveChunkReply = postTranscribe(path, lang);
     if (m_liveChunkReply)
@@ -867,6 +925,61 @@ void MainWindow::sendLiveChunk()
 void MainWindow::onLiveChunkTimer()
 {
     sendLiveChunk();
+}
+
+void MainWindow::onSherpaLiveSessionReady()
+{
+#ifdef HAVE_SHERPA_ONNX
+    if (!m_sherpaLiveSessionWatcher) return;
+    QPair<void *, QString> result = m_sherpaLiveSessionWatcher->result();
+    m_sherpaLiveSessionWatcher->deleteLater();
+    m_sherpaLiveSessionWatcher = nullptr;
+
+    SherpaLiveSession *session = static_cast<SherpaLiveSession *>(result.first);
+    if (!session || !result.second.isEmpty()) {
+        m_audioCollector->stopCapture();
+        m_isLiveRunning = false;
+        ui->btnMicRecord->setText(tr("开始实时转写"));
+        ui->btnMicRecord->setChecked(false);
+        ui->comboLiveChunkSeconds->setEnabled(true);
+        ui->labelMicStatus->setText(result.second.isEmpty() ? tr("加载模型失败") : result.second);
+        startPreview();
+        return;
+    }
+    m_sherpaLiveSession = session;
+    m_sherpaLiveCommittedText.clear();
+    ui->labelMicStatus->setText(tr("流式转写中（Sherpa-ONNX）"));
+    if (!m_sherpaFeedTimer) {
+        m_sherpaFeedTimer = new QTimer(this);
+        connect(m_sherpaFeedTimer, &QTimer::timeout, this, &MainWindow::onSherpaFeedTimeout);
+    }
+    m_sherpaFeedTimer->start(200);
+#endif
+}
+
+void MainWindow::onSherpaFeedTimeout()
+{
+#ifdef HAVE_SHERPA_ONNX
+    if (!m_sherpaLiveSession || !m_isLiveRunning) return;
+    QByteArray pcm = m_recordedPcm;
+    m_recordedPcm.clear();
+    // if (pcm.size() > 0) qDebug() << "[Sherpa] feed PCM bytes=" << pcm.size();
+    SherpaLiveDecodeResult r = feedPcmAndDecode(static_cast<SherpaLiveSession *>(m_sherpaLiveSession), pcm, 16000);
+    if (!r.error.isEmpty()) {
+        ui->labelMicStatus->setText(tr("识别错误: %1").arg(r.error));
+        qDebug() << "[Sherpa] decode error:" << r.error;
+        return;
+    }
+    // if (!r.text.isEmpty()) qDebug() << "[Sherpa] segment isFinal=" << r.isFinal << "len=" << r.text.size();
+    if (r.isFinal && !r.text.isEmpty()) {
+        m_sherpaLiveCommittedText += r.text;
+        ui->textMicResult->setPlainText(applySherpaPunctuation(m_sherpaLiveCommittedText));
+    } else if (!r.text.isEmpty()) {
+        // 无 isFinal 时也对当前全文做标点，否则标点模型永远不会被调用
+        QString full = m_sherpaLiveCommittedText + r.text;
+        ui->textMicResult->setPlainText(applySherpaPunctuation(full));
+    }
+#endif
 }
 
 void MainWindow::onLiveChunkTranscribeFinished()
@@ -926,10 +1039,25 @@ void MainWindow::onLiveChunkTranscribeFinished()
 void MainWindow::stopLiveTranscribe()
 {
     qDebug() << "[UI] Stop live transcribe, remaining PCM size=" << m_recordedPcm.size();
-    m_liveChunkTimer->stop();
+#ifdef HAVE_SHERPA_ONNX
+    if (m_asrBackend == AsrBackendSherpaONNX && m_sherpaLiveSession) {
+        if (m_sherpaFeedTimer) m_sherpaFeedTimer->stop();
+        QPair<QString, QString> last = finishSherpaLiveSession(static_cast<SherpaLiveSession *>(m_sherpaLiveSession));
+        destroySherpaLiveSession(static_cast<SherpaLiveSession *>(m_sherpaLiveSession));
+        m_sherpaLiveSession = nullptr;
+        if (!last.first.isEmpty()) {
+            QString withPunct = applySherpaPunctuation(last.first);
+            QString existing = ui->textMicResult->toPlainText();
+            ui->textMicResult->setPlainText(existing.isEmpty() ? withPunct : existing + withPunct);
+        }
+    } else
+#endif
+    {
+        m_liveChunkTimer->stop();
+        if (m_recordedPcm.size() >= 16000)
+            sendLiveChunk();
+    }
     ui->comboLiveChunkSeconds->setEnabled(true);
-    if (m_recordedPcm.size() >= 16000)  // 发送最后一段
-        sendLiveChunk();
     m_audioCollector->stopCapture();
     m_isLiveRunning = false;
     ui->btnMicRecord->setText(tr("开始实时转写"));
@@ -943,7 +1071,7 @@ MainWindow::AsrBackend MainWindow::asrBackendFromString(const QString &s)
     const QString key = s.trimmed().toLower();
     if (key == QStringLiteral("sherpa_onnx")) return AsrBackendSherpaONNX;
     if (key == QStringLiteral("vosk")) return AsrBackendVosk;
-    return AsrBackendQwenServer;  // 默认及 qwen_server
+    return AsrBackendQwenServer;  // default and qwen_server
 }
 
 QString MainWindow::asrBackendDisplayName() const
@@ -980,11 +1108,27 @@ void MainWindow::loadAsrConfig()
     ini.beginGroup(QStringLiteral("sherpa_onnx"));
     if (ini.contains(QStringLiteral("model_dir"))) {
         m_sherpaOnnxModelDir = ini.value(QStringLiteral("model_dir")).toString().trimmed();
-        // 相对路径按 exe 所在目录解析，便于配置 ../models 或 ./models
         if (!m_sherpaOnnxModelDir.isEmpty() && !QDir::isAbsolutePath(m_sherpaOnnxModelDir))
             m_sherpaOnnxModelDir = QDir(QCoreApplication::applicationDirPath()).absoluteFilePath(m_sherpaOnnxModelDir);
     }
+    if (ini.contains(QStringLiteral("punct_model"))) {
+        m_sherpaOnnxPunctModel = ini.value(QStringLiteral("punct_model")).toString().trimmed();
+        if (!m_sherpaOnnxPunctModel.isEmpty() && !QDir::isAbsolutePath(m_sherpaOnnxPunctModel))
+            m_sherpaOnnxPunctModel = QDir(QCoreApplication::applicationDirPath()).absoluteFilePath(m_sherpaOnnxPunctModel);
+    }
+    if (!m_sherpaOnnxModelDir.isEmpty()) {
+        if (!m_sherpaOnnxPunctModel.isEmpty())
+            qDebug() << "[Sherpa] punct_model config:" << m_sherpaOnnxPunctModel << "(load on first transcribe)";
+        else
+            qDebug() << "[Sherpa] punct_model not set, output will have no punctuation";
+    }
     ini.endGroup();
+#ifdef HAVE_SHERPA_ONNX
+    if (m_sherpaPunctuation) {
+        destroySherpaOfflinePunctuation(m_sherpaPunctuation);
+        m_sherpaPunctuation = nullptr;
+    }
+#endif
 
     ini.beginGroup(QStringLiteral("vosk"));
     if (ini.contains(QStringLiteral("model_dir")))
@@ -1034,18 +1178,18 @@ QNetworkReply *MainWindow::postTranscribe(const QString &filePath, const QString
     return reply;
 }
 
-// 用 Unicode 码点避免源文件编码导致“秒”“毫秒”乱码
+// Use Unicode code points to avoid encoding issues for second/millisecond chars
 static QString formatDurationSec(double sec)
 {
     if (sec <= 0 || qIsNaN(sec)) return QStringLiteral("-");
-    const QChar secChar(0x79D2);  // 秒
+    const QChar secChar(0x79D2);  // second (CJK)
     if (sec < 60) return QString::number(sec, 'f', 1) + secChar;
     int m = static_cast<int>(sec) / 60;
     int s = static_cast<int>(sec) % 60;
     return QString("%1:%2").arg(m).arg(s, 2, 10, QChar('0'));
 }
 
-// 耗时：毫秒转成可读时长 MM:SS（如 02:34）
+// Elapsed: ms to MM:SS (e.g. 02:34)
 static QString formatDurationMs(qint64 ms)
 {
     if (ms <= 0) return QStringLiteral("-");
@@ -1354,7 +1498,7 @@ void MainWindow::onSherpaTranscribeFinished()
             ui->textUploadResult->setPlainText(tr("转录失败: %1").arg(result.second));
             ui->labelUploadStatus->setText(tr("转录失败: %1").arg(result.second));
         } else {
-            ui->textUploadResult->setPlainText(result.first);
+            ui->textUploadResult->setPlainText(applySherpaPunctuation(result.first));
             ui->labelUploadStatus->setText(tr("转录完成（Sherpa-ONNX 本地）"));
             appendUploadLogRow(m_transcribeFileName, m_transcribeDurationSec, m_transcribeStartTime, durationMs);
         }
@@ -1364,7 +1508,7 @@ void MainWindow::onSherpaTranscribeFinished()
             ui->textMicResult->setPlainText(tr("转录失败: %1").arg(result.second));
             ui->labelMicStatus->setText(tr("转录失败: %1").arg(result.second));
         } else {
-            ui->textMicResult->setPlainText(result.first);
+            ui->textMicResult->setPlainText(applySherpaPunctuation(result.first));
             ui->labelMicStatus->setText(tr("转录完成（Sherpa-ONNX 本地）"));
             appendMicLogRow(m_transcribeFileName, m_transcribeDurationSec, m_transcribeStartTime, durationMs);
         }

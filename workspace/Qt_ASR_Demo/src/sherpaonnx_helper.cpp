@@ -4,6 +4,8 @@
 #include <QFile>
 #include <QDir>
 #include <QDebug>
+#include <QJsonDocument>
+#include <QJsonObject>
 #include <cstring>
 #include <vector>
 
@@ -186,6 +188,254 @@ QPair<QString, QString> transcribeWavWithSherpaOnnx(const QString &wavPath, cons
     SherpaOnnxDestroyOnlineRecognizer(recognizer);
 
     return qMakePair(text, QString());
+}
+
+QPair<QString, QString> transcribePcmWithSherpaOnnx(const QByteArray &pcm16, int sampleRate, const QString &modelDir)
+{
+    if (modelDir.isEmpty())
+        return qMakePair(QString(), QString::fromUtf8("未配置 [sherpa_onnx] model_dir"));
+    QString encoderPath, decoderPath, joinerPath, tokensPath;
+    if (!findModelFiles(modelDir, &encoderPath, &decoderPath, &joinerPath, &tokensPath))
+        return qMakePair(QString(), QString::fromUtf8("在 model_dir 中未找到 encoder/decoder/joiner.onnx 与 tokens.txt"));
+
+    const int numSamples = pcm16.size() / 2;
+    if (numSamples <= 0)
+        return qMakePair(QString(), QString::fromUtf8("PCM 数据为空"));
+    std::vector<float> samples(static_cast<size_t>(numSamples));
+    const int16_t *src = reinterpret_cast<const int16_t *>(pcm16.constData());
+    float *dst = samples.data();
+    for (int i = 0; i < numSamples; ++i)
+        dst[i] = src[i] / 32768.0f;
+
+    QByteArray encUtf8 = encoderPath.toUtf8();
+    QByteArray decUtf8 = decoderPath.toUtf8();
+    QByteArray joinUtf8 = joinerPath.toUtf8();
+    QByteArray tokUtf8 = tokensPath.toUtf8();
+
+    SherpaOnnxFeatureConfig feat_config;
+    feat_config.sample_rate = 16000;
+    feat_config.feature_dim = 80;
+
+    SherpaOnnxOnlineTransducerModelConfig transducer;
+    transducer.encoder = encUtf8.constData();
+    transducer.decoder = decUtf8.constData();
+    transducer.joiner = joinUtf8.constData();
+
+    SherpaOnnxOnlineModelConfig model_config;
+    std::memset(&model_config, 0, sizeof(model_config));
+    model_config.transducer = transducer;
+    model_config.tokens = tokUtf8.constData();
+    model_config.num_threads = 2;
+    model_config.provider = "cpu";
+    model_config.debug = 0;
+
+    SherpaOnnxOnlineRecognizerConfig config;
+    std::memset(&config, 0, sizeof(config));
+    config.feat_config = feat_config;
+    config.model_config = model_config;
+    config.decoding_method = "greedy_search";
+    config.max_active_paths = 4;
+    config.enable_endpoint = 0;
+
+    const SherpaOnnxOnlineRecognizer *recognizer = SherpaOnnxCreateOnlineRecognizer(&config);
+    if (!recognizer)
+        return qMakePair(QString(), QString::fromUtf8("创建 Sherpa-ONNX 识别器失败"));
+
+    const SherpaOnnxOnlineStream *stream = SherpaOnnxCreateOnlineStream(recognizer);
+    if (!stream) {
+        SherpaOnnxDestroyOnlineRecognizer(recognizer);
+        return qMakePair(QString(), QString::fromUtf8("创建识别流失败"));
+    }
+
+    SherpaOnnxOnlineStreamAcceptWaveform(stream, sampleRate, samples.data(), static_cast<int32_t>(samples.size()));
+    SherpaOnnxOnlineStreamInputFinished(stream);
+    while (SherpaOnnxIsOnlineStreamReady(recognizer, stream))
+        SherpaOnnxDecodeOnlineStream(recognizer, stream);
+
+    const SherpaOnnxOnlineRecognizerResult *result = SherpaOnnxGetOnlineStreamResult(recognizer, stream);
+    QString text;
+    if (result && result->text)
+        text = QString::fromUtf8(result->text);
+    if (result)
+        SherpaOnnxDestroyOnlineRecognizerResult(result);
+    SherpaOnnxDestroyOnlineStream(stream);
+    SherpaOnnxDestroyOnlineRecognizer(recognizer);
+
+    return qMakePair(text, QString());
+}
+
+// --------------- 流式实时会话（创建一次，持续喂 PCM，不再按间隔切段）---------------
+struct SherpaLiveSession {
+    const SherpaOnnxOnlineRecognizer *recognizer = nullptr;
+    const SherpaOnnxOnlineStream *stream = nullptr;
+};
+
+static bool parseResultIsFinal(const SherpaOnnxOnlineRecognizerResult *result)
+{
+    if (!result || !result->json) return false;
+    QByteArray json = QByteArray::fromRawData(result->json, static_cast<int>(std::strlen(result->json)));
+    QJsonParseError err;
+    QJsonDocument doc = QJsonDocument::fromJson(json, &err);
+    if (err.error != QJsonParseError::NoError || !doc.isObject()) return false;
+    return doc.object().value(QStringLiteral("is_final")).toBool();
+}
+
+SherpaLiveSession *createSherpaLiveSession(const QString &modelDir, QString *outError)
+{
+    if (modelDir.isEmpty()) {
+        if (outError) *outError = QString::fromUtf8("未配置 [sherpa_onnx] model_dir");
+        return nullptr;
+    }
+    QString encoderPath, decoderPath, joinerPath, tokensPath;
+    if (!findModelFiles(modelDir, &encoderPath, &decoderPath, &joinerPath, &tokensPath)) {
+        if (outError) *outError = QString::fromUtf8("在 model_dir 中未找到 encoder/decoder/joiner.onnx 与 tokens.txt");
+        return nullptr;
+    }
+    QByteArray encUtf8 = encoderPath.toUtf8(), decUtf8 = decoderPath.toUtf8();
+    QByteArray joinUtf8 = joinerPath.toUtf8(), tokUtf8 = tokensPath.toUtf8();
+
+    SherpaOnnxFeatureConfig feat_config;
+    feat_config.sample_rate = 16000;
+    feat_config.feature_dim = 80;
+    SherpaOnnxOnlineTransducerModelConfig transducer;
+    transducer.encoder = encUtf8.constData();
+    transducer.decoder = decUtf8.constData();
+    transducer.joiner = joinUtf8.constData();
+    SherpaOnnxOnlineModelConfig model_config;
+    std::memset(&model_config, 0, sizeof(model_config));
+    model_config.transducer = transducer;
+    model_config.tokens = tokUtf8.constData();
+    model_config.num_threads = 2;
+    model_config.provider = "cpu";
+    model_config.debug = 0;
+    SherpaOnnxOnlineRecognizerConfig config;
+    std::memset(&config, 0, sizeof(config));
+    config.feat_config = feat_config;
+    config.model_config = model_config;
+    config.decoding_method = "greedy_search";
+    config.max_active_paths = 4;
+    config.enable_endpoint = 0;
+
+    const SherpaOnnxOnlineRecognizer *recognizer = SherpaOnnxCreateOnlineRecognizer(&config);
+    if (!recognizer) {
+        if (outError) *outError = QString::fromUtf8("创建 Sherpa-ONNX 识别器失败");
+        return nullptr;
+    }
+    const SherpaOnnxOnlineStream *stream = SherpaOnnxCreateOnlineStream(recognizer);
+    if (!stream) {
+        SherpaOnnxDestroyOnlineRecognizer(recognizer);
+        if (outError) *outError = QString::fromUtf8("创建识别流失败");
+        return nullptr;
+    }
+    SherpaLiveSession *session = new SherpaLiveSession;
+    session->recognizer = recognizer;
+    session->stream = stream;
+    return session;
+}
+
+void destroySherpaLiveSession(SherpaLiveSession *session)
+{
+    if (!session) return;
+    if (session->stream) SherpaOnnxDestroyOnlineStream(session->stream);
+    if (session->recognizer) SherpaOnnxDestroyOnlineRecognizer(session->recognizer);
+    delete session;
+}
+
+SherpaLiveDecodeResult feedPcmAndDecode(SherpaLiveSession *session, const QByteArray &pcm16, int sampleRate)
+{
+    SherpaLiveDecodeResult out;
+    if (!session || !session->recognizer || !session->stream) {
+        out.error = QString::fromUtf8("无效会话");
+        return out;
+    }
+    if (!pcm16.isEmpty()) {
+        const int numSamples = pcm16.size() / 2;
+        if (numSamples > 0) {
+            std::vector<float> samples(static_cast<size_t>(numSamples));
+            const int16_t *src = reinterpret_cast<const int16_t *>(pcm16.constData());
+            for (int i = 0; i < numSamples; ++i) samples[i] = src[i] / 32768.0f;
+            SherpaOnnxOnlineStreamAcceptWaveform(session->stream, sampleRate, samples.data(), static_cast<int32_t>(samples.size()));
+        }
+    }
+    QString lastText;
+    bool lastIsFinal = false;
+    while (SherpaOnnxIsOnlineStreamReady(session->recognizer, session->stream)) {
+        SherpaOnnxDecodeOnlineStream(session->recognizer, session->stream);
+        const SherpaOnnxOnlineRecognizerResult *result = SherpaOnnxGetOnlineStreamResult(session->recognizer, session->stream);
+        if (result) {
+            if (result->text) lastText = QString::fromUtf8(result->text);
+            lastIsFinal = parseResultIsFinal(result);
+            SherpaOnnxDestroyOnlineRecognizerResult(result);
+        }
+    }
+    out.text = lastText;
+    out.isFinal = lastIsFinal;
+    return out;
+}
+
+QPair<QString, QString> finishSherpaLiveSession(SherpaLiveSession *session)
+{
+    if (!session || !session->stream) return qMakePair(QString(), QString::fromUtf8("无效会话"));
+    SherpaOnnxOnlineStreamInputFinished(session->stream);
+    QString lastText;
+    while (SherpaOnnxIsOnlineStreamReady(session->recognizer, session->stream)) {
+        SherpaOnnxDecodeOnlineStream(session->recognizer, session->stream);
+        const SherpaOnnxOnlineRecognizerResult *result = SherpaOnnxGetOnlineStreamResult(session->recognizer, session->stream);
+        if (result) {
+            if (result->text) lastText = QString::fromUtf8(result->text);
+            SherpaOnnxDestroyOnlineRecognizerResult(result);
+        }
+    }
+    return qMakePair(lastText, QString());
+}
+
+// --------------- 标点恢复（可选）---------------
+void *createSherpaOfflinePunctuation(const QString &ctTransformerPath, QString *outError)
+{
+    if (ctTransformerPath.isEmpty()) {
+        if (outError) *outError = QString::fromUtf8("未配置标点模型路径");
+        return nullptr;
+    }
+    qDebug() << "[Sherpa] loading punctuation model:" << ctTransformerPath;
+    QByteArray pathUtf8 = ctTransformerPath.toUtf8();
+    SherpaOnnxOfflinePunctuationModelConfig model_config;
+    std::memset(&model_config, 0, sizeof(model_config));
+    model_config.ct_transformer = pathUtf8.constData();
+    model_config.num_threads = 1;
+    model_config.debug = 0;
+    model_config.provider = "cpu";
+    SherpaOnnxOfflinePunctuationConfig config;
+    config.model = model_config;
+    const SherpaOnnxOfflinePunctuation *punct = SherpaOnnxCreateOfflinePunctuation(&config);
+    if (!punct) {
+        QString err = QString::fromUtf8("创建标点模型失败");
+        if (outError) *outError = err;
+        qDebug() << "[Sherpa] punctuation model load failed, path:" << ctTransformerPath << "error:" << err;
+        return nullptr;
+    }
+    qDebug() << "[Sherpa] punctuation model loaded, path:" << ctTransformerPath;
+    return const_cast<SherpaOnnxOfflinePunctuation *>(punct);
+}
+
+void destroySherpaOfflinePunctuation(void *punct)
+{
+    if (punct)
+        SherpaOnnxDestroyOfflinePunctuation(static_cast<const SherpaOnnxOfflinePunctuation *>(punct));
+}
+
+QString addPunctuationToText(void *punct, const QString &text)
+{
+    if (!punct || text.isEmpty()) return text;
+    QByteArray utf8 = text.toUtf8();
+    const char *out = SherpaOfflinePunctuationAddPunct(static_cast<const SherpaOnnxOfflinePunctuation *>(punct), utf8.constData());
+    if (!out) {
+        qDebug() << "[Sherpa] punctuation model returned null, using original text";
+        return text;
+    }
+    QString result = QString::fromUtf8(out);
+    SherpaOfflinePunctuationFreeText(out);
+    // qDebug() << "[Sherpa] punct: in" << text.size() << "-> out" << result.size();
+    return result;
 }
 
 #endif // HAVE_SHERPA_ONNX
