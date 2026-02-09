@@ -16,6 +16,8 @@ api_base_url=http://localhost:8000
 ; 仅当 backend=sherpa_onnx 时生效；相对路径相对于 exe 所在目录
 ; 若在项目下建 models 目录并放入 encoder/decoder/joiner.onnx、tokens.txt，exe 在 build_release 时可填 ../models
 model_dir=../models
+; 可选：标点恢复模型路径（.onnx），配置后转写结果会自动加标点；不配则无标点。见集成说明“标点模型”小节
+;punct_model=../models/punct/model.int8.onnx
 
 [vosk]
 ; 仅当 backend=vosk 时生效，后续版本使用

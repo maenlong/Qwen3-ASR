@@ -80,6 +80,24 @@
 
 ---
 
+## 步骤四（可选）：标点恢复
+
+转写结果默认无标点。若需自动加标点、便于断句，可配置 Sherpa-ONNX 的**离线标点模型**：
+
+1. 下载中英标点模型（CT-Transformer）：  
+   https://github.com/k2-fsa/sherpa-onnx/releases/tag/punctuation-models  
+   选择 **sherpa-onnx-punct-ct-transformer-zh-en-vocab272727-2024-04-12-int8**，解压后使用其中的 **model.int8.onnx**。
+
+2. 在 config.ini 的 `[sherpa_onnx]` 下增加（路径可为相对 exe 的路径）：
+   ```ini
+   punct_model=../models/punct/model.int8.onnx
+   ```
+   将路径改为你实际放置 `model.int8.onnx` 的路径。
+
+3. 配置后，**上传转写**、**录音转写**和**实时转写**的结果都会先经标点模型后处理再显示；不配置则保持无标点。
+
+---
+
 ## 常见问题
 
 - **缺少 DLL**：先确认已用 Release/Debug 完整构建一次（构建会自动把 `bin/*.dll` 与 `lib/sherpa-onnx-c-api.dll` 拷到 `build_release/` 或 `build_debug/`）；若仍报错，检查 `third_party/sherpa-onnx/bin/` 下是否有 DLL。  
