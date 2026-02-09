@@ -330,7 +330,8 @@ MainWindow::MainWindow(QWidget *parent)
     connect(m_liveChunkTimer, &QTimer::timeout, this, &MainWindow::onLiveChunkTimer);
 
     m_networkManager = new QNetworkAccessManager(this);
-    loadApiConfig();
+    loadAsrConfig();
+    setWindowTitle(tr("Qwen3-ASR 语音识别 Demo") + QStringLiteral(" [") + asrBackendDisplayName() + QChar(']'));
     m_transcribeProgressTimer = new QTimer(this);
     m_transcribeProgressTimer->setInterval(1000);
     connect(m_transcribeProgressTimer, &QTimer::timeout, this, &MainWindow::onTranscribeProgressTick);
@@ -731,6 +732,10 @@ int MainWindow::liveChunkIntervalSec() const
 
 void MainWindow::onMicStartLiveTranscribe()
 {
+    if (!isQwenServerBackend()) {
+        ui->labelMicStatus->setText(tr("当前引擎为 %1，实时分段转写仅支持 Qwen 服务端。Sherpa-ONNX/Vosk 的实时模式请等待后续版本。请在 config.ini 中设置 [asr] backend=qwen_server").arg(asrBackendDisplayName()));
+        return;
+    }
     const int intervalSec = liveChunkIntervalSec();
     qDebug() << "[UI] Start live transcribe, device=" << m_selectedMicDeviceName << "interval_sec=" << intervalSec;
     if (m_selectedMicDeviceName.isEmpty()) {
@@ -854,18 +859,57 @@ void MainWindow::stopLiveTranscribe()
     startPreview();
 }
 
-void MainWindow::loadApiConfig()
+MainWindow::AsrBackend MainWindow::asrBackendFromString(const QString &s)
+{
+    const QString key = s.trimmed().toLower();
+    if (key == QStringLiteral("sherpa_onnx")) return AsrBackendSherpaONNX;
+    if (key == QStringLiteral("vosk")) return AsrBackendVosk;
+    return AsrBackendQwenServer;  // 默认及 qwen_server
+}
+
+QString MainWindow::asrBackendDisplayName() const
+{
+    switch (m_asrBackend) {
+    case AsrBackendSherpaONNX: return tr("Sherpa-ONNX（本地）");
+    case AsrBackendVosk:       return tr("Vosk（本地）");
+    default:                  return tr("Qwen3-ASR（服务端）");
+    }
+}
+
+void MainWindow::loadAsrConfig()
 {
     m_apiBaseUrl = QStringLiteral("http://localhost:8000");
+    m_asrBackend = AsrBackendQwenServer;
+    m_sherpaOnnxModelDir.clear();
+    m_voskModelDir.clear();
+
     QString path = QCoreApplication::applicationDirPath() + QStringLiteral("/config.ini");
     QSettings ini(path, QSettings::IniFormat);
+
+    ini.beginGroup(QStringLiteral("asr"));
+    if (ini.contains(QStringLiteral("backend")))
+        m_asrBackend = asrBackendFromString(ini.value(QStringLiteral("backend")).toString());
+    ini.endGroup();
+
     ini.beginGroup(QStringLiteral("server"));
     if (ini.contains(QStringLiteral("api_base_url"))) {
         QString url = ini.value(QStringLiteral("api_base_url")).toString().trimmed();
         if (!url.isEmpty()) m_apiBaseUrl = url;
     }
     ini.endGroup();
-    qDebug() << "[Config] API base URL:" << m_apiBaseUrl << "config_file=" << path;
+
+    ini.beginGroup(QStringLiteral("sherpa_onnx"));
+    if (ini.contains(QStringLiteral("model_dir")))
+        m_sherpaOnnxModelDir = ini.value(QStringLiteral("model_dir")).toString().trimmed();
+    ini.endGroup();
+
+    ini.beginGroup(QStringLiteral("vosk"));
+    if (ini.contains(QStringLiteral("model_dir")))
+        m_voskModelDir = ini.value(QStringLiteral("model_dir")).toString().trimmed();
+    ini.endGroup();
+
+    qDebug() << "[Config] ASR backend:" << (m_asrBackend == AsrBackendQwenServer ? "qwen_server" : m_asrBackend == AsrBackendSherpaONNX ? "sherpa_onnx" : "vosk")
+             << "api_base_url:" << m_apiBaseUrl << "config_file=" << path;
 }
 
 QNetworkReply *MainWindow::postTranscribe(const QString &filePath, const QString &language)
@@ -966,6 +1010,10 @@ void MainWindow::appendMicLogRow(const QString &fileName, double durationSec,
 void MainWindow::onTranscribeUploadClicked()
 {
     qDebug() << "[UI] Button: Transcribe upload, file=" << m_uploadFilePath;
+    if (!isQwenServerBackend()) {
+        ui->labelUploadStatus->setText(tr("当前引擎为 %1，上传转写仅支持 Qwen 服务端。请在 config.ini 中设置 [asr] backend=qwen_server").arg(asrBackendDisplayName()));
+        return;
+    }
     if (m_uploadFilePath.isEmpty()) {
         ui->labelUploadStatus->setText(tr("请先选择音频文件"));
         return;
@@ -1080,6 +1128,10 @@ void MainWindow::onUploadTranscribeFinished()
 void MainWindow::startMicTranscribe()
 {
     qDebug() << "[UI] Start mic transcribe (record mode), path=" << m_micRecordPath;
+    if (!isQwenServerBackend()) {
+        ui->labelMicStatus->setText(tr("当前引擎为 %1，录音转写仅支持 Qwen 服务端。请在 config.ini 中设置 [asr] backend=qwen_server").arg(asrBackendDisplayName()));
+        return;
+    }
     if (m_micRecordPath.isEmpty()) return;
     ui->micProgressWrap->setVisible(true);
     m_transcribeStartTime = QDateTime::currentDateTime();

@@ -7,6 +7,7 @@
 #include <QByteArray>
 #include <QComboBox>
 #include <QDateTime>
+#include <QString>
 
 class QAudioInput;
 class QIODevice;
@@ -56,8 +57,14 @@ private slots:
     void onMicTranscribeFinished();
     void onTranscribeProgressTick();
 
+public:
+    enum AsrBackend { AsrBackendQwenServer, AsrBackendSherpaONNX, AsrBackendVosk };
+    static AsrBackend asrBackendFromString(const QString &s);
+    QString asrBackendDisplayName() const;
+    bool isQwenServerBackend() const { return m_asrBackend == AsrBackendQwenServer; }
+
 private:
-    void loadApiConfig();
+    void loadAsrConfig();
     QNetworkReply *postTranscribe(const QString &filePath, const QString &language);
     void appendUploadLogRow(const QString &fileName, double durationSec, const QDateTime &startTime, qint64 durationMs);
     void appendMicLogRow(const QString &fileName, double durationSec, const QDateTime &startTime, qint64 durationMs);
@@ -107,6 +114,9 @@ private:
 
     QNetworkAccessManager *m_networkManager = nullptr;
     QString m_apiBaseUrl;
+    AsrBackend m_asrBackend = AsrBackendQwenServer;
+    QString m_sherpaOnnxModelDir;
+    QString m_voskModelDir;
     QNetworkReply *m_uploadTranscribeReply = nullptr;
     QNetworkReply *m_micTranscribeReply = nullptr;
     QTimer *m_transcribeProgressTimer = nullptr;

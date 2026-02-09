@@ -1,0 +1,21 @@
+; Qt_ASR_Demo 配置文件示例
+; 复制为 config.ini 并放到可执行文件同目录下使用
+
+[asr]
+; 引擎选择: qwen_server | sherpa_onnx | vosk
+; - qwen_server: 使用服务端 Qwen3-ASR（需先启动 api_server.py）
+; - sherpa_onnx: 本地 Sherpa-ONNX（后续版本实现）
+; - vosk:        本地 Vosk（后续版本实现）
+backend=qwen_server
+
+[server]
+; 仅当 backend=qwen_server 时生效
+api_base_url=http://localhost:8000
+
+[sherpa_onnx]
+; 仅当 backend=sherpa_onnx 时生效，后续版本使用
+model_dir=./sherpa_onnx_models
+
+[vosk]
+; 仅当 backend=vosk 时生效，后续版本使用
+model_dir=./vosk_models
