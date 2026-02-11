@@ -22,3 +22,6 @@ wheels/
 .vscode/
 venv/
 env/
+
+# 模型文件过大，不提交；见文档下载
+*.onnx
