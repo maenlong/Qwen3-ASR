@@ -970,14 +970,12 @@ void MainWindow::onSherpaFeedTimeout()
         qDebug() << "[Sherpa] decode error:" << r.error;
         return;
     }
-    // if (!r.text.isEmpty()) qDebug() << "[Sherpa] segment isFinal=" << r.isFinal << "len=" << r.text.size();
+    // 实时只显示原文；结束时再对全文加一次标点
     if (r.isFinal && !r.text.isEmpty()) {
         m_sherpaLiveCommittedText += r.text;
-        ui->textMicResult->setPlainText(applySherpaPunctuation(m_sherpaLiveCommittedText));
+        ui->textMicResult->setPlainText(m_sherpaLiveCommittedText);
     } else if (!r.text.isEmpty()) {
-        // 无 isFinal 时也对当前全文做标点，否则标点模型永远不会被调用
-        QString full = m_sherpaLiveCommittedText + r.text;
-        ui->textMicResult->setPlainText(applySherpaPunctuation(full));
+        ui->textMicResult->setPlainText(m_sherpaLiveCommittedText + r.text);
     }
 #endif
 }
@@ -1045,11 +1043,10 @@ void MainWindow::stopLiveTranscribe()
         QPair<QString, QString> last = finishSherpaLiveSession(static_cast<SherpaLiveSession *>(m_sherpaLiveSession));
         destroySherpaLiveSession(static_cast<SherpaLiveSession *>(m_sherpaLiveSession));
         m_sherpaLiveSession = nullptr;
-        if (!last.first.isEmpty()) {
-            QString withPunct = applySherpaPunctuation(last.first);
-            QString existing = ui->textMicResult->toPlainText();
-            ui->textMicResult->setPlainText(existing.isEmpty() ? withPunct : existing + withPunct);
-        }
+        QString fullRaw = ui->textMicResult->toPlainText();
+        if (fullRaw.isEmpty() && !last.first.isEmpty()) fullRaw = last.first;
+        if (!fullRaw.isEmpty())
+            ui->textMicResult->setPlainText(applySherpaPunctuation(fullRaw));
     } else
 #endif
     {
